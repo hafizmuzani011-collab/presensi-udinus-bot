@@ -4,6 +4,7 @@ Dependencies: config.py, storage.py, utils.py, tg.py, telegram_bot.py, instance_
 import asyncio
 import json
 import logging
+import logging.handlers
 import os
 import sys
 from datetime import datetime, timedelta
@@ -77,11 +78,16 @@ except Exception:
         DASH_CONTROL[key] = default if default is not None else ""
         return val
 
-# Setup logging
+# Setup logging dengan rotation (max 10MB per file, 5 backups = 50MB total)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
+    handlers=[
+        logging.handlers.RotatingFileHandler(
+            LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        ),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger("telegram_bot")
 

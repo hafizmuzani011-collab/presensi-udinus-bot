@@ -11,6 +11,7 @@ import re
 import secrets
 import threading
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, abort, Response
 
@@ -817,7 +818,14 @@ def toggle_autopilot():
 @app.route("/control/trigger-tugas", methods=["POST"])
 @_require_token
 def trigger_tugas():
+    """Trigger cek tugas. Rate-limited 60 detik."""
     with CONTROL_LOCK:
+        last_ts = CONTROL.get("last_trigger_tugas_ts", 0)
+        now_ts = datetime.now().timestamp()
+        if now_ts - last_ts < 60:
+            wait = int(60 - (now_ts - last_ts))
+            return jsonify({"error": f"Rate limit. Tunggu {wait}s."}), 429
+        CONTROL["last_trigger_tugas_ts"] = now_ts
         CONTROL["trigger_tugas"] = (CONTROL.get("trigger_tugas", 0) or 0) + 1
     logger.info("Trigger cek tugas via dashboard")
     return jsonify({"triggered": True})
@@ -826,12 +834,20 @@ def trigger_tugas():
 @app.route("/control/trigger-presensi", methods=["POST"])
 @_require_token
 def trigger_presensi():
-    """Trigger presensi manual untuk akun tertentu. Body: {"who": "saya"} or ?who=pacar"""
+    """Trigger presensi manual untuk akun tertentu. Body: {"who": "saya"} or ?who=pacar.
+    Rate-limited 30 detik per akun."""
     data = request.get_json(silent=True) or {}
     who = data.get("who") or request.args.get("who", "saya")
     if who not in ("saya", "pacar"):
         return jsonify({"error": "Invalid who (saya/pacar)"}), 400
-    set_control("trigger_presensi", who)
+    with CONTROL_LOCK:
+        last_ts = CONTROL.get(f"last_trigger_presensi_{who}", 0)
+        now_ts = datetime.now().timestamp()
+        if now_ts - last_ts < 30:
+            wait = int(30 - (now_ts - last_ts))
+            return jsonify({"error": f"Rate limit. Tunggu {wait}s."}), 429
+        CONTROL[f"last_trigger_presensi_{who}"] = now_ts
+        CONTROL["trigger_presensi"] = who
     logger.info(f"Trigger presensi via dashboard: {who}")
     return jsonify({"triggered": True, "who": who})
 

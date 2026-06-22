@@ -375,46 +375,6 @@ async def _verify_presensi_success(page) -> tuple[bool, str]:
         return True, f"verify error (assume success): {e}"
 
 
-def extract_deadline_from_text(page_text: str) -> list[dict]:
-    """Ekstrak deadline dari text mentah halaman (fallback regex)."""
-    tasks = []
-    lines = page_text.split("\n")
-    current_name = ""
-    current_course = ""
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Cari nama tugas
-        name_match = re.search(r'(?:Tugas|Assignment|Capstone|Quiz|Project)\s*[\d:]*\s*[:-]?\s*(.+)', line, re.I)
-        if name_match:
-            current_name = name_match.group(1).strip()
-            continue
-
-        # Cari deadline
-        deadline_match = re.search(
-            r'(\d{1,2}\s+(?:Januari|Februari|Maret|April|Mei|Juni|Juli|Agustus|September|Oktober|November|Desember|January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}[\s,]+(?:\d{1,2}[:\.]\d{2}\s*(?:AM|PM)?))',
-            line, re.I
-        )
-        if deadline_match and current_name:
-            tasks.append({
-                "name": current_name,
-                "course": current_course or "",
-                "deadline": deadline_match.group(0).strip(),
-            })
-            current_name = ""
-            current_course = ""
-
-        # Cari mata kuliah
-        course_match = re.search(r'(?:Mata Kuliah|Course|MK)\s*[:]\s*(.+)', line, re.I)
-        if course_match:
-            current_course = course_match.group(1).strip()
-
-    return tasks
-
-
 def extract_tasks_from_text(body_text: str, body_html: str = "") -> list[dict]:
     """Ekstrak tugas dari body text halaman Kulino pakai Python regex.
 
@@ -439,30 +399,6 @@ def extract_tasks_from_text(body_text: str, body_html: str = "") -> list[dict]:
                 "deadline": deadline_clean,
                 "link": "",
             })
-
-    # Pattern 2: "X is due" alone (deadline in next line or same line)
-    if not results:
-        matches = re.findall(r"([A-Za-z][^\n]{5,120})\s+is due", body_text)
-        for name in matches:
-            name_clean = name.strip()
-            key = name_clean.lower()
-            if name_clean and key not in seen:
-                seen.add(key)
-                results.append({
-                    "name": name_clean,
-                    "course": "",
-                    "deadline": "",
-                    "link": "",
-                })
-
-    # Pattern 3: Extract course names from HTML (for context)
-    if body_html:
-        courses = re.findall(r'course-name[^>]*>([^<]+)', body_html)
-        for c in courses[:5]:
-            c = c.strip()
-            if c and len(c) < 60:
-                # Add as context
-                pass
 
     return results
 
