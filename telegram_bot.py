@@ -244,7 +244,6 @@ async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
                 logger.info(f"Skip {sel} (disabled)")
                 continue
             # Skip kalau element adalah nav link (di header) bukan button card
-            tag = await btn.evaluate("el => el.tagName")
             role = await btn.evaluate("el => (el.closest('nav, header, .navbar, .sidebar') ? 'nav' : 'content')")
             if role == "nav":
                 logger.info(f"Skip {sel} (nav/header element)")

@@ -704,8 +704,6 @@ def status():
 @app.route("/jadwal")
 @_require_token
 def jadwal():
-    hari_id = {"monday":"senin","tuesday":"selasa","wednesday":"rabu",
-               "thursday":"kamis","friday":"jumat","saturday":"sabtu","sunday":"minggu"}.get(datetime.now().strftime("%A").lower(), "")
     schedules = read_json(SCHEDULES_FILE)
     data = {}
     for who in ("saya", "pacar"):

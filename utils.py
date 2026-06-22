@@ -189,7 +189,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                     from tts import text_to_voice, EDGE_TTS_AVAILABLE
                     if EDGE_TTS_AVAILABLE:
                         voice_text = f"Hai kak {data['account']}, tugas {data['name']} deadline tinggal {int(hours)} jam lagi, jangan lupa dikerjakan ya!"
-                        p = await text_to_voice(voice_text)
+                        await text_to_voice(voice_text)
                 except Exception:
                     pass
 

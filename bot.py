@@ -722,8 +722,6 @@ async def main() -> None:
                         cb = update["callback_query"]
                         cb_id = cb.get("id")
                         cb_data = cb.get("data", "")
-                        cb_chat = cb.get("message", {}).get("chat", {}).get("id")
-                        cb_msg_id = cb.get("message", {}).get("message_id")
                         cb_chat_id = cb.get("from", {}).get("id")
                         if cb_chat_id and cb_chat_id not in ALLOWED_CHAT_IDS:
                             continue
