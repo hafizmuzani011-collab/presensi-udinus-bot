@@ -239,12 +239,24 @@ async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
     ]:
         try:
             btn = await page.query_selector(sel)
-            if btn:
-                logger.info(f"Klik tombol: {sel}")
-                await btn.click()
-                await page.wait_for_timeout(2000)
-                clicked = True
-                break
+            if not btn:
+                continue
+            # Skip kalau button disabled
+            is_disabled = await btn.get_attribute("disabled")
+            if is_disabled is not None:
+                logger.info(f"Skip {sel} (disabled)")
+                continue
+            # Skip kalau element adalah nav link (di header) bukan button card
+            tag = await btn.evaluate("el => el.tagName")
+            role = await btn.evaluate("el => (el.closest('nav, header, .navbar, .sidebar') ? 'nav' : 'content')")
+            if role == "nav":
+                logger.info(f"Skip {sel} (nav/header element)")
+                continue
+            logger.info(f"Klik tombol: {sel}")
+            await btn.click()
+            await page.wait_for_timeout(2000)
+            clicked = True
+            break
         except Exception as e:
             logger.warning(f"Selector {sel} gagal: {e}")
 
