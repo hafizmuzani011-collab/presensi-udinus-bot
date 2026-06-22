@@ -176,9 +176,14 @@ async def proactive_check():
                         continue
                     today_sched = schedules.get(who, {}).get(hari_id, [])
                     for jam, mk, ruang in today_sched:
-                        jam_mulai = jam.split(" - ")[0].strip().replace(".", ":")
+                        parts = jam.split("-")
+                        if len(parts) != 2:
+                            continue
+                        jam_mulai = parts[0].strip().replace(".", ":")
+                        jam_selesai = parts[1].strip().replace(".", ":")
                         try:
                             h, m = map(int, jam_mulai.split(":"))
+                            h_end, m_end = map(int, jam_selesai.split(":"))
                         except ValueError:
                             continue
                         sesi_key = f"{who}:{hari_id}:{jam_mulai}"
@@ -186,7 +191,8 @@ async def proactive_check():
                             continue
                         now_min = hour * 60 + minute
                         start_min = h * 60 + m
-                        if start_min <= now_min < start_min + 30:
+                        end_min = h_end * 60 + m_end
+                        if start_min <= now_min < end_min:
                             _presensi_done.add(sesi_key)
                             logger.info(f"Presensi: {who} - {mk}")
                             await send_message(f"🤖 Presensi {MHS_ACCOUNTS[who]['name']} - {mk} {jam}")

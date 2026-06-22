@@ -85,6 +85,96 @@ async def scrape_kulino_tugas(page, kulino_akun: dict) -> list[dict]:
     return unik
 
 
+async def _click_confirmation_in_modal(page) -> bool:
+    """Klik tombol konfirmasi 'Ya' di modal/dialog setelah klik presensi.
+
+    SiAdin pake Tailwind CSS custom dialog (bukan SweetAlert2/Bootstrap).
+    """
+    # Tunggu modal render
+    await page.wait_for_timeout(2000)
+
+    # Deteksi elemen dialog via JS — cari overlay fixed + button "Ya" di dalamnya
+    dialog_info = await page.evaluate("""() => {
+        const result = {found: false, buttons: []};
+        const candidates = document.querySelectorAll('.fixed.inset-0, .z-50');
+        for (const el of candidates) {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
+            const btns = Array.from(el.querySelectorAll('button, a')).filter(b => {
+                const s = window.getComputedStyle(b);
+                const r = b.getBoundingClientRect();
+                return r.width > 0 && r.height > 0 && s.display !== 'none';
+            });
+            const texts = btns.map(b => {
+                const r = b.getBoundingClientRect();
+                return {
+                    tag: b.tagName,
+                    text: (b.innerText || b.value || '').trim(),
+                    rect: {w: Math.round(r.width), h: Math.round(r.height)}
+                };
+            }).filter(b => b.text.length > 0);
+            if (texts.some(t => /ya|tidak|presensi sekarang/i.test(t.text))) {
+                result.found = true;
+                result.buttons = texts;
+                break;
+            }
+        }
+        return result;
+    }""")
+
+    if not dialog_info.get("found"):
+        logger.info("Tidak ada dialog konfirmasi terdeteksi")
+        return False
+
+    logger.info(f"Dialog ditemukan, {len(dialog_info['buttons'])} buttons:")
+    for b in dialog_info["buttons"]:
+        logger.info(f"  [{b['tag']}] '{b['text']}'")
+
+    # Cari button "Ya" (prioritas), lalu "Tidak" kita skip
+    ya_btn = None
+    for b in dialog_info["buttons"]:
+        if b["text"].strip().lower() in ("ya", "yes", "ok"):
+            ya_btn = b
+            break
+    # Fallback: cari yang mengandung "ya"
+    if not ya_btn:
+        for b in dialog_info["buttons"]:
+            if b["text"].strip().lower().startswith("ya"):
+                ya_btn = b
+                break
+
+    if not ya_btn:
+        logger.warning("Tombol 'Ya' tidak ditemukan di dialog")
+        return False
+
+    # Klik via JS (lebih reliable dari Playwright click buat dialog Tailwind)
+    try:
+        clicked_text = await page.evaluate("""(targetText) => {
+            const candidates = document.querySelectorAll('.fixed.inset-0, .z-50');
+            for (const el of candidates) {
+                const btns = el.querySelectorAll('button, a');
+                for (const b of btns) {
+                    const t = (b.innerText || b.value || '').trim();
+                    if (t === targetText) {
+                        b.click();
+                        return t;
+                    }
+                }
+            }
+            return null;
+        }""", ya_btn["text"])
+        if clicked_text:
+            logger.info(f"Klik 'Ya' via JS: '{clicked_text}'")
+            await page.wait_for_timeout(3000)
+            return True
+    except Exception as e:
+        logger.warning(f"JS click 'Ya' gagal: {e}")
+
+    return False
+
+
 async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
     """Login ke MHS (https://mhs.dinus.ac.id/) dan presensi otomatis.
 
@@ -152,26 +242,40 @@ async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
             if btn:
                 logger.info(f"Klik tombol: {sel}")
                 await btn.click()
-                await page.wait_for_timeout(3000)
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await page.wait_for_timeout(2000)
                 clicked = True
                 break
         except Exception as e:
             logger.warning(f"Selector {sel} gagal: {e}")
 
-    # Screenshot bukti
+    if not clicked:
+        if info['items']:
+            return False, f"Tidak ada tombol presensi yang bisa diklik. Items: {len(info['items'])}"
+        return False, "Tidak ada presensi tersedia saat ini"
+
+    # === Tangani modal konfirmasi (SweetAlert/Bootstrap/custom) ===
+    # Halaman SiAdin biasanya membuka dialog "Presensi Sekarang?" -> tombol "Ya"
+    confirmed = await _click_confirmation_in_modal(page)
+    if confirmed:
+        logger.info("Konfirmasi modal diklik")
+    else:
+        logger.info("Tidak ada modal konfirmasi (mungkin langsung submit)")
+
+    # Tunggu halaman settle setelah konfirmasi
+    try:
+        await page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception as e:
+        logger.warning(f"networkidle timeout (mungkin tetap OK): {e}")
+    await page.wait_for_timeout(2000)
+
+    # Screenshot bukti SETELAH konfirmasi
     try:
         await page.screenshot(path=SCREENSHOT_PRESENSI, full_page=True)
         logger.info("Screenshot bukti presensi berhasil")
     except Exception as e:
         logger.error(f"Screenshot gagal: {e}")
 
-    if clicked:
-        return True, "Berhasil klik tombol presensi"
-    elif info['items']:
-        return False, f"Tidak ada tombol presensi yang bisa diklik. Items: {len(info['items'])}"
-    else:
-        return False, "Tidak ada presensi tersedia saat ini"
+    return True, "Berhasil klik tombol presensi"
 
 
 def extract_deadline_from_text(page_text: str) -> list[dict]:
