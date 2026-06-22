@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/*.py') }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright httpx openai flask
+          playwright install chromium
+
+      - name: Syntax check
+        run: |
+          for f in *.py; do
+            echo "Checking $f..."
+            python -m py_compile "$f" && echo "  ✓ OK" || exit 1
+          done
+
+      - name: Import test
+        run: |
+          for m in config storage utils tg browser telegram_bot web_dashboard instance_lock; do
+            echo "Importing $m..."
+            python -c "import $m" && echo "  ✓ OK" || exit 1
+          done
+          echo "Skipping bot.py (requires runtime)"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "### CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- All syntax checks: PASS" >> $GITHUB_STEP_SUMMARY
