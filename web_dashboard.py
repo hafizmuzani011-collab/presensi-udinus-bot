@@ -180,6 +180,9 @@ def dashboard_page(token, page="dashboard"):
 <span>Autopilot</span>
 <div id="at" class="w-10 h-5 bg-gray-300 rounded-full relative transition-colors"><div class="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform"></div></div>
 </button>
+<button id="installBtn" onclick="doInstall()" class="hidden w-full px-4 py-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-full hover:bg-green-100 flex items-center justify-center gap-2">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg> Install App
+</button>
 <button onclick="toggleTheme()" class="w-full px-4 py-2 text-xs text-gray-600 border border-gray-200 rounded-full hover:bg-gray-50 flex items-center justify-center gap-2" id="themeBtn">
 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
 Dark Mode
@@ -561,7 +564,10 @@ var t=days[d.getDay()]+', '+pad(d.getDate())+' '+months[d.getMonth()]+' '+d.getF
 var el=document.getElementById('realtimeClock');
 if(el)el.textContent=t;
 }}
-if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
+if('serviceWorker' in navigator){{navigator.serviceWorker.register('/sw.js');}}
+let deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',function(e){{e.preventDefault();deferredPrompt=e;var b2=document.getElementById('installBtn');if(b2)b2.classList.remove('hidden');}});
+function doInstall(){{if(deferredPrompt){{deferredPrompt.prompt();deferredPrompt.userChoice.then(function(){{deferredPrompt=null;var b2=document.getElementById('installBtn');if(b2)b2.classList.add('hidden');}});}}}}
 tickClock();
 setInterval(tickClock,1000);
 setInterval(ld,30000);
