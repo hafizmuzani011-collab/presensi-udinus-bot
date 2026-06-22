@@ -15,11 +15,13 @@ def set_default_chat_id(chat_id: int | None) -> None:
     ALLOWED_CHAT_ID = chat_id
 
 
-async def send_message(text: str, parse_mode: str = "Markdown") -> bool:
+async def send_message(text: str, parse_mode: str = "Markdown", reply_markup: dict | None = None) -> bool:
     if not ALLOWED_CHAT_ID:
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": ALLOWED_CHAT_ID, "text": text, "parse_mode": parse_mode}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(url, json=payload)
@@ -32,6 +34,42 @@ async def send_message(text: str, parse_mode: str = "Markdown") -> bool:
         return False
     except Exception as e:
         logger.error(f"Koneksi error: {e}")
+        return False
+
+
+def make_inline_keyboard(buttons: list[list[dict]]) -> dict:
+    """Helper: bikin inline keyboard markup.
+    buttons = [[{"text": "Hadir", "callback_data": "presensi_saya"}], ...]
+    """
+    return {"inline_keyboard": buttons}
+
+
+async def answer_callback(callback_query_id: str, text: str = "") -> bool:
+    """Acknowledge inline keyboard click."""
+    if not BOT_TOKEN:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, json={"callback_query_id": callback_query_id, "text": text})
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+async def edit_message(chat_id: int, message_id: int, text: str) -> bool:
+    """Edit message yang udah dikirim (untuk update inline keyboard)."""
+    if not BOT_TOKEN:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(url, json={
+                "chat_id": chat_id, "message_id": message_id,
+                "text": text, "parse_mode": "Markdown"
+            })
+        return r.status_code == 200
+    except Exception:
         return False
 
 

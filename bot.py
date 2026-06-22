@@ -20,7 +20,7 @@ from storage import (
     backup_tasks_deadlines, write_logbook, cleanup_expired_deadlines,
     load_presensi_done, save_presensi_done,
 )
-from tg import send_message, send_photo, get_updates, set_default_chat_id
+from tg import send_message, send_photo, get_updates, set_default_chat_id, make_inline_keyboard, answer_callback
 from utils import get_schedule_for, process_and_remind_deadlines
 
 # Load saved stats
@@ -269,13 +269,17 @@ async def proactive_check():
                                 continue
                             _reminder_sent.add(reminder_key)
                             nama = MHS_ACCOUNTS[who]["name"]
+                            # Kirim dengan inline keyboard quick action
+                            buttons = [[{"text": "✅ Presensi", "callback_data": "presensi:hadir:" + who}]]
+                            kb = make_inline_keyboard(buttons)
                             await send_message(
                                 f"⏰ *Reminder 30 menit*\n\n"
                                 f"📖 {mk}\n"
                                 f"🕐 {jam}\n"
                                 f"🏫 Ruang {ruang}\n"
                                 f"👤 {nama}\n\n"
-                                f"_Jangan lupa presensi ya! (autopilot akan jalan di jam mulai)_"
+                                f"_Jangan lupa presensi ya!_",
+                                reply_markup=kb,
                             )
 
             # === Autopilot Presensi (HANYA kalau autopilot on) ===
@@ -517,13 +521,45 @@ async def handle_command(text: str, chat_id: int | None = None):
             await send_message("🤖 Autopilot: AKTIF")
 
     elif "presensi" in t or "hadir" in t:
-        ok, msg = await do_presensi_siadin("saya")
+        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        ok, msg = await do_presensi_siadin(target)
         if ok:
             STATS["presensi_done"] += 1
-            await send_message("✅ Presensi berhasil!")
+            await send_message(f"✅ Presensi {MHS_ACCOUNTS[target]['name']} berhasil!")
             await send_photo(SCREENSHOT_PRESENSI)
         else:
             await send_message(f"❌ {msg}")
+
+    elif t.startswith("ujian"):
+        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        await send_message(f"⏳ Cek jadwal ujian {MHS_ACCOUNTS[target]['name']}...")
+        import telegram_bot as tb
+        from browser import get_page
+        try:
+            async with get_page() as page:
+                account = MHS_ACCOUNTS[target]
+                await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2000)
+                await page.fill("#username", account["nim"])
+                await page.fill("#password", account["password"])
+                async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
+                    await page.click("button:has-text('Masuk ke SiAdin')")
+                items, _ = await tb.scrape_jadwal_ujian(page, account)
+            if items:
+                lines = [f"📋 *Jadwal Ujian {MHS_ACCOUNTS[target]['name']}*\n"]
+                for i, item in enumerate(items, 1):
+                    lines.append(
+                        f"{i}. *{item.get('matkul', '?')}*\n"
+                        f"   📅 {item.get('hari_tanggal', '?')}\n"
+                        f"   🕐 {item.get('jam', '?')} | 🏫 {item.get('ruang', '-')}\n"
+                        f"   📝 {item.get('ujian', '-')}"
+                    )
+                await send_message("\n\n".join(lines))
+            else:
+                await send_message(f"📭 Belum ada jadwal ujian.")
+        except Exception as e:
+            logger.error(f"ujian error: {e}")
+            await send_message(f"❌ Gagal cek jadwal ujian: {e}")
 
     else:
         # Natural language fallback: parse pertanyaan
@@ -599,6 +635,31 @@ async def main():
                 for update in updates:
                     offset = update["update_id"] + 1
                     save_offset(offset)
+                    # Handle callback_query (inline keyboard)
+                    if "callback_query" in update:
+                        cb = update["callback_query"]
+                        cb_id = cb.get("id")
+                        cb_data = cb.get("data", "")
+                        cb_chat = cb.get("message", {}).get("chat", {}).get("id")
+                        cb_msg_id = cb.get("message", {}).get("message_id")
+                        cb_chat_id = cb.get("from", {}).get("id")
+                        if cb_chat_id and cb_chat_id not in ALLOWED_CHAT_IDS:
+                            continue
+                        await answer_callback(cb_id, "⏳ Memproses...")
+                        # Parse callback_data: "presensi:hadir:saya" atau "presensi:hadir:pacar"
+                        if cb_data.startswith("presensi:hadir:"):
+                            who = cb_data.split(":")[-1]
+                            if who in MHS_ACCOUNTS:
+                                await send_message(f"⏳ Presensi {MHS_ACCOUNTS[who]['name']}...")
+                                ok, msg = await do_presensi_siadin(who)
+                                if ok:
+                                    STATS["presensi_done"] += 1
+                                    await send_message(f"✅ Presensi {MHS_ACCOUNTS[who]['name']} berhasil!")
+                                    await send_photo(SCREENSHOT_PRESENSI)
+                                else:
+                                    await send_message(f"⚠️ Presensi gagal: {msg}")
+                        continue
+
                     msg = update.get("message", {})
                     chat = msg.get("chat", {})
                     chat_id = chat.get("id")

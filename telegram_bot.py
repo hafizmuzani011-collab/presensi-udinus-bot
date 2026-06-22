@@ -467,6 +467,108 @@ def extract_tasks_from_text(body_text: str, body_html: str = "") -> list[dict]:
     return results
 
 
+async def scrape_jadwal_ujian(page, mhs_akun: dict) -> tuple[list[dict], str]:
+    """Scrape jadwal UTS/UAS dari MHS SiAdin.
+
+    Returns (list of {jenis, matkul, hari_tanggal, jam, ruang, kursi, ujian}, jenis).
+    jenis = "UTS" | "UAS".
+    """
+    try:
+        await page.goto("https://mhs.dinus.ac.id/akademik/jadwalUjian",
+                       wait_until="networkidle", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        info = await page.evaluate("""() => {
+            const result = {uts: [], uas: []};
+            const text = document.body.innerText || '';
+            // Split by section headers
+            const sections = text.split(/Jadwal Ujian (Tengah|Akhir) Semester/);
+            // Section[0] = header, [1] = "Tengah", [2] = uts content, [3] = "Akhir", [4] = uas content
+            for (let i = 0; i < sections.length; i++) {
+                const label = sections[i].toLowerCase();
+                const content = sections[i + 1] || '';
+                if (label.includes("tengah")) {
+                    result.uts = parseSection(content);
+                } else if (label.includes("akhir")) {
+                    result.uas = parseSection(content);
+                }
+            }
+            function parseSection(text) {
+                const items = [];
+                const blocks = text.split(/\\s{2,}/).map(s => s.trim()).filter(s => s.length > 0);
+                let i = 0;
+                while (i < blocks.length) {
+                    const block = blocks[i];
+                    if (block.match(/[A-Z]{3,}/) && (block.includes("SKS") || i < blocks.length - 5)) {
+                        // Course name
+                        const matkul = block;
+                        const klpk = blocks[i+1] || "";
+                        // Find table row "Hari Jam Ruang Kursi Ujian"
+                        const hari = blocks[i+2] || "";
+                        const jam = blocks[i+3] || "";
+                        const ruang = blocks[i+4] || "";
+                        const kursi = blocks[i+5] || "";
+                        const ujian = blocks[i+6] || "";
+                        if (hari && jam) {
+                            items.push({matkul, klpk, hari_tanggal: hari, jam, ruang, kursi, ujian});
+                        }
+                        i += 7;
+                    } else {
+                        i++;
+                    }
+                }
+                return items;
+            }
+            return result;
+        }""")
+
+        # Fallback: pakai regex kalau JS parsing gagal
+        all_items = info.get("uts", []) + info.get("uas", [])
+        if not all_items:
+            body = await page.inner_text("body")
+            return _parse_ujian_text(body), "UTS+UAS"
+
+        return all_items, "UTS+UAS"
+    except Exception as e:
+        logger.error(f"scrape_jadwal_ujian error: {e}")
+        return [], ""
+
+
+def _parse_ujian_text(body: str) -> list[dict]:
+    """Parse plain text halaman jadwal ujian."""
+    items = []
+    current_matkul = ""
+    jam = ""
+    hari_tanggal = ""
+    for line in body.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r"\b(UTS|UAS|Teori|Praktek|Tengah|Akhir|Semester)\b", line, re.I):
+            continue
+        if re.search(r"\b(Senin|Selasa|Rabu|Kamis|Jumat|Sabtu|Minggu)\b", line, re.I) and "," in line:
+            hari_tanggal = line
+        elif re.match(r"^\d{2}:\d{2}\s*-\s*\d{2}:\d{2}$", line):
+            jam = line
+        elif "SKS" in line or line.isupper():
+            if line not in ("KDMK:", "KLPK:"):
+                current_matkul = line
+        else:
+            ruang = line
+            if current_matkul and jam:
+                items.append({
+                    "matkul": current_matkul,
+                    "hari_tanggal": hari_tanggal,
+                    "jam": jam,
+                    "ruang": ruang,
+                    "kursi": "",
+                    "ujian": "",
+                })
+                current_matkul = ""
+                jam = ""
+    return items
+
+
 async def login_mhs_and_scrape_jadwal(page, mhs_akun: dict, semester: str = "2025-2026 Genap") -> dict:
     """Login ke https://mhs.dinus.ac.id/, ambil jadwal dari halaman akademik.
 

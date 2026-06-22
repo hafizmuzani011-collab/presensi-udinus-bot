@@ -609,7 +609,10 @@ function rf(){{ld();}}
 function filterCards(q){{q=q.toLowerCase();var d=currentData?.deadline?.items||[];var f=d.filter(i=>i.name.toLowerCase().includes(q));renderDeadline(f);}}
 function filterByUser(u){{var d=currentData?.deadline?.items||[];var f=u==='all'?d:d.filter(i=>i.account===u);renderDeadline(f);}}
 
-if(localStorage.getItem('theme')==='dark')document.documentElement.classList.add('dark');
+// Dark mode auto: manual toggle by user, atau auto berdasarkan jam
+var savedTheme=localStorage.getItem('theme');
+if(savedTheme==='dark')document.documentElement.classList.add('dark');
+else if(!savedTheme){{var h=new Date().getHours();if(h>=18||h<6)document.documentElement.classList.add('dark');}}
 ld();
 showPageFromHash();
 window.addEventListener('hashchange',showPageFromHash);
