@@ -27,17 +27,20 @@ from config import (
 # === Logger ===
 logger = logging.getLogger("telegram_bot")
 
-# === Auth token (fixed untuk demo) ===
+# === Auth token (env, dengan fallback dev) ===
 DASH_TOKEN = os.environ.get("DASH_TOKEN") or "presensi123"
-logger.info(f"Dashboard token: {DASH_TOKEN}")
+# JANGAN log token di production (info disclosure)
+if os.environ.get("DASH_TOKEN"):
+    logger.info("Dashboard token loaded from DASH_TOKEN env")
+else:
+    logger.warning("DASH_TOKEN env not set, using insecure default 'presensi123'")
 
 app = Flask(__name__)
 
 # === Control & History (in-memory, share dengan bot.py) ===
-try:
-    from web_dashboard import CONTROL
-except ImportError:
-    CONTROL = {"autopilot": True, "trigger_tugas": False, "last_msg": ""}
+# NOTE: CONTROL di-akses langsung oleh bot.py via `from web_dashboard import CONTROL`.
+# Dilarang self-import (modul sedang loading), jadi CONTROL didefinisikan langsung.
+CONTROL = {"autopilot": True, "trigger_tugas": 0, "last_msg": ""}
 
 PRESENSI_HISTORY_FILE = ROOT / "presensi_history.json"
 
@@ -54,21 +57,24 @@ def save_history(items):
 
 
 # ============ Helpers ============
+_log_cache = {"mtime": 0.0, "lines": []}
+_log_cache_lock = threading.Lock()
+
+
 def read_file_lines(path, n=200):
     try:
         mt = os.path.getmtime(path)
     except OSError:
         return []
-    if mt != _log_cache["mtime"] or len(_log_cache["lines"]) > 5000:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                _log_cache["lines"] = f.readlines()
-        except OSError:
-            return []
-        _log_cache["mtime"] = mt
+    with _log_cache_lock:
+        if mt != _log_cache["mtime"] or len(_log_cache["lines"]) > 5000:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    _log_cache["lines"] = f.readlines()
+            except OSError:
+                return []
+            _log_cache["mtime"] = mt
     return [l.strip() for l in _log_cache["lines"][-n:] if l.strip()]
-
-_log_cache = {"mtime": 0.0, "lines": []}
 
 def read_json(path):
     try:
@@ -706,7 +712,7 @@ def pwa_manifest():
         "name": "Presensi Udinus",
         "short_name": "Presensi",
         "description": "Dashboard monitoring presensi & tugas Udinus",
-        "start_url": "/?token=presensi123",
+        "start_url": "/",
         "display": "standalone",
         "background_color": "#f8f9ff",
         "theme_color": "#0b1c30",
@@ -784,4 +790,6 @@ def run_in_thread(port=8787):
 
 
 if __name__ == "__main__":
-    start_server(debug=True)
+    # debug=True HANYA untuk development (Werkzeug debugger bisa execute code arbitrary)
+    debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
+    start_server(debug=debug_mode)

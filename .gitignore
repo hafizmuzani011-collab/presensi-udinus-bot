@@ -17,8 +17,6 @@ presensi_history.json
 # Auto-generated
 stats.json
 tasks_deadlines.json.bak
-bot.lock
-telegram_offset.json
 
 # Screenshots & dynamic files
 bukti_*.png

@@ -2,31 +2,43 @@
 Dependencies: config.py, storage.py, utils.py, tg.py, telegram_bot.py, instance_lock.py
 """
 import asyncio
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timedelta
 
 import instance_lock
-from config import *
-from storage import *
+from config import (
+    KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, MHS_URL,
+    LOG_FILE, LOG_DIR, STATS_FILE, SCREENSHOT_PRESENSI, SCREENSHOT_TUGAS,
+    SCHEDULES_FILE, BOT_TOKEN, ALLOWED_CHAT_IDS,
+)
+from storage import (
+    load_chat_ids, save_chat_id, load_offset, save_offset,
+    load_schedules, load_tasks_deadlines, save_tasks_deadlines,
+    backup_tasks_deadlines, write_logbook, cleanup_expired_deadlines,
+    load_presensi_done, save_presensi_done,
+)
 from tg import send_message, send_photo, get_updates, set_default_chat_id
-
-# Load saved stats
-import json as _json
-if os.path.exists("stats.json"):
-    try:
-        with open("stats.json") as _f:
-            STATS.update(_json.load(_f))
-    except:
-        pass
 from utils import get_schedule_for, process_and_remind_deadlines
 
-# Dashboard control (shared with web dashboard)
+# Load saved stats
+if os.path.exists(STATS_FILE):
+    try:
+        with open(STATS_FILE, encoding="utf-8") as _f:
+            stats_loaded = json.load(_f)
+            from config import STATS
+            STATS.update(stats_loaded)
+    except Exception:
+        pass
+from config import STATS  # ensure latest after load
+
+# Dashboard control (shared with web dashboard) - circular safe
 try:
     from web_dashboard import CONTROL as DASH_CONTROL
-except ImportError:
-    DASH_CONTROL = {"autopilot": True, "trigger_tugas": False}
+except Exception:
+    DASH_CONTROL = {"autopilot": True, "trigger_tugas": 0, "trigger_presensi": 0}
 
 # Setup logging
 logging.basicConfig(
@@ -35,6 +47,22 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
 )
 logger = logging.getLogger("telegram_bot")
+
+# Bot state
+ALLOWED_CHAT_ID = None
+_polling_backoff = 1.0  # exponential backoff
+
+
+def get_autopilot() -> bool:
+    """Single source of truth untuk status autopilot presensi."""
+    return bool(DASH_CONTROL.get("autopilot", True))
+
+
+def set_autopilot(enabled: bool) -> None:
+    """Set autopilot dari Telegram command atau dashboard."""
+    DASH_CONTROL["autopilot"] = bool(enabled)
+    logger.info(f"Autopilot -> {enabled}")
+
 
 # ============ Browser Scrapers ============
 async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
@@ -53,7 +81,10 @@ async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
             await page.click("button:has-text('Log in')")
             await page.wait_for_timeout(5000)
 
-            if "login" in page.url.lower():
+            # Robust detection: cek kalau form login masih ada = gagal
+            login_form = await page.query_selector("#inputName")
+            if login_form:
+                logger.warning("Login Kulino gagal: form login masih muncul")
                 return []
 
             tugas = await tb.scrape_kulino_tugas(page, account)
@@ -105,9 +136,9 @@ _tugas_checked_today: str | None = None
 _presensi_done: set = set()
 _presensi_done_date: str = ""
 
+
 def _load_presensi_done_for_today(today_str: str) -> set:
     """Load presensi_done keys. Reset kalau tanggal ganti (hari baru)."""
-    from storage import load_presensi_done
     global _presensi_done, _presensi_done_date
     data = load_presensi_done()
     if data.get("date") != today_str:
@@ -118,10 +149,12 @@ def _load_presensi_done_for_today(today_str: str) -> set:
         _presensi_done_date = today_str
     return _presensi_done
 
+
 def _save_presensi_done(today_str: str) -> None:
     """Persist ke file."""
-    from storage import save_presensi_done
     save_presensi_done(today_str, _presensi_done)
+
+
 
 async def proactive_check():
     global _tugas_checked_today, _presensi_done
@@ -137,18 +170,18 @@ async def proactive_check():
             # Load presensi_done persistent (auto-reset kalau ganti hari)
             _load_presensi_done_for_today(today_str)
 
-            # === Web dashboard trigger (single source of truth) ===
-            if not DASH_CONTROL.get("autopilot"):
-                await asyncio.sleep(10)
-                continue
-            if DASH_CONTROL.pop("trigger_tugas", False):
-                await send_message("🔔 Trigger dari dashboard: cek tugas...")
+            autopilot_on = get_autopilot()
+
+            # === Trigger dari dashboard (counter, tidak ke-miss) ===
+            trigger_tugas_count = int(DASH_CONTROL.get("trigger_tugas", 0) or 0)
+            if trigger_tugas_count > 0:
+                DASH_CONTROL["trigger_tugas"] = 0
+                await send_message(f"🔔 Trigger dari dashboard: cek tugas ({trigger_tugas_count}x)...")
                 for key in KULINO_ACCOUNTS:
                     nama = KULINO_ACCOUNTS[key]["name"]
                     await send_message(f"⏳ Menghubungi Kulino {nama}...")
                     tugas = await login_kulino_and_get_tugas(key)
                     if tugas:
-                        # Kirim tabel detail
                         rows = [f"{'No':<4} {'Tugas':<40} {'Deadline':<20}"]
                         rows.append("-" * 70)
                         for i, t in enumerate(tugas, 1):
@@ -160,7 +193,7 @@ async def proactive_check():
                     else:
                         await send_message(f"📭 Tidak ada tugas aktif untuk {nama}.")
 
-            # === Cek tugas jam 17:00 (sekali sehari) ===
+            # === Cek tugas jam 17:00 (sekali sehari) - INDEPENDENT dari autopilot ===
             if hour == 17 and minute < 2 and _tugas_checked_today != today_str:
                 _tugas_checked_today = today_str
                 await send_message("⏰ 17:00 - Cek tugas otomatis...")
@@ -172,26 +205,26 @@ async def proactive_check():
                             lines.append(f"{i}. {t.get('name','?')} - {t.get('deadline','?')}")
                         await send_message("\n".join(lines))
                     await process_and_remind_deadlines(tugas, key, send_message)
-                await asyncio.sleep(60)
+                # Tidak ada sleep 60 - langsung ke iterasi berikutnya
 
-            # === Cek deadline setiap 30 mnt ===
+            # === Cek deadline setiap 30 mnt - INDEPENDENT dari autopilot ===
             if minute % 30 == 0:
                 for key in KULINO_ACCOUNTS:
                     await process_and_remind_deadlines([], key, send_message)
 
-            # === Auto backup setiap jam ===
+            # === Auto backup setiap jam - INDEPENDENT dari autopilot ===
             if minute == 0:
                 if backup_tasks_deadlines():
                     logger.info("Backup tasks_deadlines.json OK")
                 # Simpan stats supaya tidak hilang saat restart
                 try:
-                    with open("stats.json", "w") as sf:
-                        _json.dump(STATS, sf, indent=2)
+                    with open(STATS_FILE, "w", encoding="utf-8") as sf:
+                        json.dump(STATS, sf, indent=2)
                 except Exception as e:
                     logger.error(f"Save stats gagal: {e}")
 
-            # === Autopilot Presensi ===
-            if AUTOPILOT_ENABLED and hari_id:
+            # === Autopilot Presensi (HANYA kalau autopilot on) ===
+            if autopilot_on and hari_id:
                 schedules = load_schedules()
                 for who in ("saya", "pacar"):
                     if who not in MHS_ACCOUNTS:
@@ -226,13 +259,11 @@ async def proactive_check():
                                 await send_photo(SCREENSHOT_PRESENSI)
                                 # Catat ke logbook harian
                                 try:
-                                    from storage import write_logbook
                                     write_logbook(now.strftime("%Y-%m-%d"), who, jam, mk, ruang, "hadir")
                                 except Exception as e:
                                     logger.error(f"Logbook error: {e}")
                             else:
                                 await send_message(f"⚠️ Presensi {MHS_ACCOUNTS[who]['name']} gagal: {msg}")
-                            await asyncio.sleep(60)
 
             await asyncio.sleep(30)
         except Exception as e:
@@ -243,7 +274,6 @@ async def proactive_check():
 
 # ============ Command Handlers ============
 async def handle_command(text: str, chat_id: int | None = None):
-    global AUTOPILOT_ENABLED, _presensi_done
     text = text.strip()
     t = text.lower()
 
@@ -277,6 +307,7 @@ async def handle_command(text: str, chat_id: int | None = None):
         )
 
     elif t in ("/status", "status", "stats"):
+        from config import BOT_START_TIME
         uptime = datetime.now() - BOT_START_TIME
         d, r = uptime.days, uptime.seconds
         h, m = r // 3600, (r % 3600) // 60
@@ -289,7 +320,7 @@ async def handle_command(text: str, chat_id: int | None = None):
             f"📝 {STATS['tugas_checks']} | ✅ {STATS['presensi_done']}\n"
             f"⚠ {STATS['errors']} | 📋 {active}\n"
             f"👥 {len(ALLOWED_CHAT_IDS)} user\n"
-            f"🤖 {'Aktif' if AUTOPILOT_ENABLED else 'Nonaktif'}"
+            f"🤖 {'Aktif' if get_autopilot() else 'Nonaktif'}"
         )
 
     elif t in ("/tanggal", "tanggal", "kalender"):
@@ -353,8 +384,6 @@ async def handle_command(text: str, chat_id: int | None = None):
             await send_message("🧹 Tidak ada yang expired.")
 
     elif t in ("logbook", "catatan"):
-        from config import LOG_DIR
-        import os
         if not os.path.exists(LOG_DIR):
             await send_message("📓 Logbook kosong.")
         else:
@@ -365,7 +394,7 @@ async def handle_command(text: str, chat_id: int | None = None):
                 text = "📓 *Logbook* (3 terakhir):\n\n"
                 for f in files:
                     p = os.path.join(LOG_DIR, f)
-                    with open(p) as fp:
+                    with open(p, encoding="utf-8") as fp:
                         text += f"📅 {f[:-3]}\n```\n{fp.read()[:500]}\n```\n"
                 await send_message(text)
 
@@ -426,12 +455,10 @@ async def handle_command(text: str, chat_id: int | None = None):
 
     elif "autopilot" in t:
         if "nonaktif" in t or "off" in t:
-            AUTOPILOT_ENABLED = False
-            DASH_CONTROL["autopilot"] = False
+            set_autopilot(False)
             await send_message("🤖 Autopilot: NONAKTIF")
         else:
-            AUTOPILOT_ENABLED = True
-            DASH_CONTROL["autopilot"] = True
+            set_autopilot(True)
             await send_message("🤖 Autopilot: AKTIF")
 
     elif "presensi" in t or "hadir" in t:
@@ -476,7 +503,7 @@ async def handle_command(text: str, chat_id: int | None = None):
 
 # ============ Main ============
 async def main():
-    global ALLOWED_CHAT_ID, ALLOWED_CHAT_IDS
+    global ALLOWED_CHAT_ID, ALLOWED_CHAT_IDS, _polling_backoff
 
     if not BOT_TOKEN:
         sys.exit(1)
@@ -497,7 +524,6 @@ async def main():
     logger.info("Proactive loop started")
 
     # Start web dashboard (nonaktif jika DASHBOARD_DISABLE=1)
-    import os
     if os.environ.get("DASHBOARD_DISABLE", "0") != "1":
         try:
             from web_dashboard import run_in_thread
@@ -506,14 +532,15 @@ async def main():
         except Exception as e:
             logger.error(f"Web dashboard gagal: {e}")
     else:
-        logger.info("Web dashboard DISABLED (jalankan manual: python web_dashboard.py)")
+        logger.info("Web dashboard DISABLED")
 
-    # Polling
+    # Polling dengan exponential backoff
     offset = load_offset()
     try:
         while True:
             try:
                 updates = await get_updates(offset)
+                _polling_backoff = 1.0  # reset on success
                 for update in updates:
                     offset = update["update_id"] + 1
                     save_offset(offset)
@@ -538,7 +565,9 @@ async def main():
             except Exception as e:
                 STATS["errors"] += 1
                 logger.error(f"Polling error: {e}")
-                await asyncio.sleep(5)
+                # Exponential backoff: 1, 2, 4, 8, 16, 32, max 60 detik
+                await asyncio.sleep(min(_polling_backoff, 60))
+                _polling_backoff = min(_polling_backoff * 2, 60)
     finally:
         instance_lock.release_lock()
         from browser import close_browser

@@ -28,45 +28,7 @@ def save_chat_id(chat_id: int) -> None:
     Path(CHAT_ID_FILE).write_text(",".join(str(i) for i in ids))
 
 
-# ============ Lock & Offset ============
-def acquire_lock(pid: int) -> bool:
-    if os.path.exists(LOCK_FILE):
-        try:
-            old_pid = int(Path(LOCK_FILE).read_text().strip())
-            _kill_old_instance(old_pid)
-        except (ValueError, OSError):
-            pass
-    try:
-        Path(LOCK_FILE).write_text(str(pid))
-        return True
-    except OSError:
-        return False
-
-
-def _kill_old_instance(old_pid: int) -> None:
-    """Kill old process by PID (helper for backward compat)."""
-    import psutil
-    if psutil.pid_exists(old_pid):
-        try:
-            p = psutil.Process(old_pid)
-            if p.name().lower().startswith("python"):
-                p.terminate()
-                try:
-                    p.wait(timeout=5)
-                except psutil.TimeoutExpired:
-                    p.kill()
-                    p.wait(timeout=3)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
-
-def release_lock(pid: int) -> None:
-    try:
-        if os.path.exists(LOCK_FILE):
-            if Path(LOCK_FILE).read_text().strip() == str(pid):
-                os.remove(LOCK_FILE)
-    except OSError:
-        pass
+# ============ Offset (lock sekarang di instance_lock.py) ============
 
 
 def save_offset(offset: int) -> None:
@@ -156,7 +118,6 @@ def write_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang:
     with open(path, "a", encoding="utf-8") as f:
         # Header kalau file baru
         if os.path.getsize(path) == 0:
-            from datetime import datetime
             dt = datetime.fromisoformat(date_str)
             f.write(f"## {dt.strftime('%A, %d %B %Y')}\n\n")
         f.write(line)

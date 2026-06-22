@@ -1,9 +1,10 @@
-"""Konfigurasi bot - credentials dari .env (fallback ke hardcoded untuk dev)."""
+"""Konfigurasi bot - credentials WAJIB dari .env, TIDAK ada fallback hardcoded."""
 import os
+import json
 from datetime import datetime
 
 def _load_env():
-    """Load .env file (jika ada) ke os.environ, tanpa dependency eksternal."""
+    """Load .env file ke os.environ."""
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     if not os.path.exists(env_path):
         return
@@ -18,7 +19,9 @@ def _load_env():
 _load_env()
 
 # ==== Telegram ====
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8617660963:AAFc7NYirNw_Q30dxu2eiavh_x-8p1Si9uE")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_BOT_TOKEN tidak ditemukan! Buat file .env dari .env.example")
 CHAT_ID_FILE = "chat_id.txt"
 
 # ==== Files ====
@@ -35,28 +38,34 @@ PRESENSI_DONE_FILE = "presensi_done.json"
 KULINO_URL = "https://kulino.dinus.ac.id/"
 MHS_URL = "https://mhs.dinus.ac.id/"
 
-# ==== Credentials (dari env dengan fallback) ====
+# ==== Credentials (WAJIB dari .env) ====
+def _req_env(key, display_name):
+    val = os.getenv(key)
+    if not val:
+        raise RuntimeError(f"{display_name} ({key}) tidak ditemukan di .env!")
+    return val
+
 KULINO_ACCOUNTS = {
     "saya": {
-        "nim": os.getenv("KULINO_SAYA_NIM", "a222503103"),
-        "password": os.getenv("KULINO_SAYA_PASS", "Dinus-19082006"),
+        "nim": _req_env("KULINO_SAYA_NIM", "Kulino NIM Hafizh"),
+        "password": _req_env("KULINO_SAYA_PASS", "Kulino password Hafizh"),
         "name": "Hafizh",
     },
     "pacar": {
-        "nim": os.getenv("KULINO_PACAR_NIM", "a112415549"),
-        "password": os.getenv("KULINO_PACAR_PASS", "Nailahazfa20"),
+        "nim": _req_env("KULINO_PACAR_NIM", "Kulino NIM Azfa"),
+        "password": _req_env("KULINO_PACAR_PASS", "Kulino password Azfa"),
         "name": "Azfa",
     },
 }
 MHS_ACCOUNTS = {
     "saya": {
-        "nim": os.getenv("MHS_SAYA_NIM", "A22.2025.03103"),
-        "password": os.getenv("MHS_SAYA_PASS", "Hafiiz12345"),
+        "nim": _req_env("MHS_SAYA_NIM", "MHS NIM Hafizh"),
+        "password": _req_env("MHS_SAYA_PASS", "MHS password Hafizh"),
         "name": "Hafizh",
     },
     "pacar": {
-        "nim": os.getenv("MHS_PACAR_NIM", "A11.2024.15549"),
-        "password": os.getenv("MHS_PACAR_PASS", "Nailahazfa20"),
+        "nim": _req_env("MHS_PACAR_NIM", "MHS NIM Azfa"),
+        "password": _req_env("MHS_PACAR_PASS", "MHS password Azfa"),
         "name": "Azfa",
     },
 }
@@ -66,7 +75,6 @@ CLAUDEFIRE_API_KEY = os.getenv("CLAUDEFIRE_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash-free")
 
 # ==== Bot State ====
-AUTOPILOT_ENABLED = True
 ALLOWED_CHAT_ID = None
 ALLOWED_CHAT_IDS: list[int] = []
 BOT_START_TIME = datetime.now()
@@ -80,21 +88,3 @@ STATS = {
     "presensi_done": 0,
     "errors": 0,
 }
-
-def load_stats():
-    """Load stats dari file supaya tidak hilang saat restart."""
-    if os.path.exists(STATS_FILE):
-        try:
-            with open(STATS_FILE) as f:
-                return {**STATS, **json.load(f)}
-        except (OSError, json.JSONDecodeError):
-            pass
-    return STATS
-
-def save_stats():
-    """Simpan stats ke file."""
-    try:
-        with open(STATS_FILE, "w") as f:
-            json.dump(STATS, f, indent=2)
-    except OSError:
-        pass
