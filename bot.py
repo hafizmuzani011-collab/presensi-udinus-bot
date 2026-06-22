@@ -508,7 +508,7 @@ async def main():
     if not BOT_TOKEN:
         sys.exit(1)
 
-    # Lock
+    # Lock (Named Mutex - atomic OS-level, anti race condition)
     if not instance_lock.acquire_lock():
         logger.error("Instance lain sedang berjalan")
         sys.exit(1)

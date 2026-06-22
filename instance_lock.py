@@ -1,48 +1,59 @@
-"""Single-instance lock & update offset persistence."""
+"""Single-instance lock via PID file + Windows Named Mutex."""
 
+import ctypes
+import json
 import os
 import sys
-import json
 import psutil
 from pathlib import Path
 
 LOCK_FILE = "bot.lock"
 OFFSET_FILE = "telegram_offset.json"
+_MUTEX_NAME = "PresensiUdinusBot-Lock"
+
+
+def _check_named_mutex() -> bool:
+    """Cek apakah instance lain sudah acquire mutex. Return True kalau sudah ada."""
+    try:
+        import msvcrt
+        # Coba buka mutex existing
+        handle = ctypes.windll.kernel32.OpenMutexW(0x00100000, False, _MUTEX_NAME)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _create_or_die_mutex() -> bool:
+    """Coba buat mutex. Return True kalau sukses (ini instance pertama)."""
+    try:
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, True, _MUTEX_NAME)
+        err = ctypes.windll.kernel32.GetLastError()
+        if mutex and err == 183:  # ERROR_ALREADY_EXISTS
+            ctypes.windll.kernel32.CloseHandle(mutex)
+            return False
+        if not mutex:
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def acquire_lock() -> bool:
-    """Cegah multiple instance. Kill process lama kalau perlu."""
+    """Cegah multiple instance. Pakai PID file + Named Mutex (atomic)."""
+    # Named Mutex adalah single source of truth
+    if not _create_or_die_mutex():
+        return False
+
     my_pid = os.getpid()
-    if os.path.exists(LOCK_FILE):
-        try:
-            old_pid = int(Path(LOCK_FILE).read_text().strip())
-            if old_pid == my_pid:
-                return True
-            if psutil.pid_exists(old_pid):
-                try:
-                    p = psutil.Process(old_pid)
-                    cmdline = " ".join(p.cmdline()).lower() if p.cmdline() else ""
-                    if "bot.py" in cmdline or "instance_lock" in cmdline or "python" in cmdline:
-                        print(f"Bot lama PID {old_pid} masih jalan. Menghentikan...")
-                        p.terminate()
-                        try:
-                            p.wait(timeout=5)
-                        except psutil.TimeoutExpired:
-                            print(f"PID {old_pid} tidak terminate, kill paksa...")
-                            p.kill()
-                            p.wait(timeout=3)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-        except (ValueError, OSError):
-            pass
-    # Atomic write: tulis ke temp dulu, lalu rename
     tmp = LOCK_FILE + ".tmp"
     try:
         Path(tmp).write_text(str(my_pid))
         os.replace(tmp, LOCK_FILE)
         return True
     except OSError as e:
-        print(f"Gagal tulis lock file: {e}")
         return False
 
 
