@@ -1,5 +1,6 @@
 """Persistence layer - semua file I/O terpusat di sini."""
 import json
+import logging
 import os
 import shutil
 from datetime import datetime
@@ -12,13 +13,25 @@ from config import (
     PRESENSI_DONE_FILE,
 )
 
+logger = logging.getLogger("telegram_bot")
+
 
 # ============ Chat ID ============
 def load_chat_ids() -> list[int]:
     if not os.path.exists(CHAT_ID_FILE):
         return []
     data = Path(CHAT_ID_FILE).read_text().strip()
-    return [int(p) for p in data.split(",") if p.strip().lstrip("-").isdigit()]
+    ids = []
+    for p in data.split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            ids.append(int(p))
+        except ValueError:
+            logger.warning(f"Skipping invalid chat_id: {p!r}")
+            continue
+    return ids
 
 
 def save_chat_id(chat_id: int) -> None:
@@ -45,7 +58,8 @@ def load_offset() -> int | None:
     try:
         with open(OFFSET_FILE) as f:
             return int(json.load(f).get("offset"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        logger.warning(f"Load offset corrupt: {e}")
         return None
 
 
@@ -64,7 +78,8 @@ def load_tasks_deadlines() -> dict:
     try:
         with open(TASKS_DEADLINE_FILE) as f:
             return json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Tasks deadlines corrupt, reset: {e}")
         return {"notified": {}}
 
 
@@ -131,7 +146,8 @@ def load_presensi_done() -> dict:
     try:
         with open(PRESENSI_DONE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        logger.warning(f"Presensi done corrupt, reset: {e}")
         return {"date": "", "keys": []}
 
 

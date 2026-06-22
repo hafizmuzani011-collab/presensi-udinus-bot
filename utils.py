@@ -139,6 +139,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
     cache = load_tasks_deadlines()
     now = datetime.now()
     reminded = False
+    dirty = False
 
     for task in tasks:
         raw = (task.get("deadline") or "").strip()
@@ -157,7 +158,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
             "name": name, "course": course, "account": account_name,
             "deadline_raw": raw, "deadline_iso": parsed,
         }
-        save_tasks_deadlines(cache)
+        dirty = True
         import logging
         logging.getLogger("telegram_bot").info(f"Deadline: {task_key} -> {parsed}")
 
@@ -183,9 +184,8 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                    f"📅 {data['deadline_raw']}")
             if await send_message(msg):
                 notified[f"{task_key}:h6"] = True
-                cache["notified"] = notified
-                save_tasks_deadlines(cache)
                 reminded = True
+                dirty = True
                 # Voice reminder
                 try:
                     from tts import text_to_voice, EDGE_TTS_AVAILABLE
@@ -202,10 +202,12 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                    f"📅 {data['deadline_raw']}")
             if await send_message(msg):
                 notified[f"{task_key}:h12"] = True
-                cache["notified"] = notified
-                save_tasks_deadlines(cache)
                 reminded = True
+                dirty = True
 
-    if reminded:
-        import logging
-        logging.getLogger("telegram_bot").info("Deadline reminders sent")
+    if dirty:
+        if reminded:
+            import logging
+            logging.getLogger("telegram_bot").info(f"Deadline reminders sent | tasks updated: {sum(1 for k in cache if k != 'notified')}")
+        cache["notified"] = cache.get("notified", {})
+        save_tasks_deadlines(cache)

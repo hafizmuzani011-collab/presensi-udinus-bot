@@ -13,6 +13,7 @@ from config import (
     KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, MHS_URL,
     LOG_FILE, LOG_DIR, STATS_FILE, SCREENSHOT_PRESENSI, SCREENSHOT_TUGAS,
     SCHEDULES_FILE, BOT_TOKEN, ALLOWED_CHAT_IDS,
+    get_stats_snapshot, save_stats, inc_stat,
 )
 from storage import (
     load_chat_ids, save_chat_id, load_offset, save_offset,
@@ -20,7 +21,7 @@ from storage import (
     backup_tasks_deadlines, write_logbook, cleanup_expired_deadlines,
     load_presensi_done, save_presensi_done,
 )
-from tg import send_message, send_photo, get_updates, set_default_chat_id, make_inline_keyboard, answer_callback
+from tg import send_message, send_photo, get_updates, make_inline_keyboard, answer_callback
 from utils import get_schedule_for, process_and_remind_deadlines
 
 # Load saved stats
@@ -28,11 +29,11 @@ if os.path.exists(STATS_FILE):
     try:
         with open(STATS_FILE, encoding="utf-8") as _f:
             stats_loaded = json.load(_f)
-            from config import STATS
-            STATS.update(stats_loaded)
-    except Exception:
-        pass
-from config import STATS  # ensure latest after load
+            from config import STATS, STATS_LOCK
+            with STATS_LOCK:
+                STATS.update(stats_loaded)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"WARN: Load stats gagal: {e}")
 
 # Load holidays
 HOLIDAYS_FILE = "holidays.json"
@@ -188,8 +189,10 @@ def _save_presensi_done(today_str: str) -> None:
 
 async def proactive_check():
     global _tugas_checked_today, _presensi_done
+    _proactive_backoff = 1.0
     while True:
         try:
+            _proactive_backoff = 1.0
             now = datetime.now()
             hour, minute = now.hour, now.minute
             today_str = now.strftime("%Y-%m-%d")
@@ -266,12 +269,7 @@ async def proactive_check():
             if minute == 0:
                 if backup_tasks_deadlines():
                     logger.info("Backup tasks_deadlines.json OK")
-                # Simpan stats supaya tidak hilang saat restart
-                try:
-                    with open(STATS_FILE, "w", encoding="utf-8") as sf:
-                        json.dump(STATS, sf, indent=2)
-                except Exception as e:
-                    logger.error(f"Save stats gagal: {e}")
+                save_stats()
 
             # === Reminder 30 menit sebelum kelas (INDEPENDENT dari autopilot) ===
             if hari_id:
@@ -356,9 +354,12 @@ async def proactive_check():
 
             await asyncio.sleep(30)
         except Exception as e:
-            STATS["errors"] += 1
+            inc_stat("errors")
             logger.error(f"Proactive error: {e}")
-            await asyncio.sleep(30)
+            sleep_s = min(_proactive_backoff, 300)
+            logger.warning(f"Proactive backoff: sleeping {sleep_s:.0f}s")
+            await asyncio.sleep(sleep_s)
+            _proactive_backoff = min(_proactive_backoff * 2, 300)
 
 
 # ============ Command Handlers ============
@@ -416,12 +417,13 @@ async def handle_command(text: str, chat_id: int | None = None):
         h, m = r // 3600, (r % 3600) // 60
         cache = load_tasks_deadlines()
         active = sum(1 for k in cache if k != "notified")
+        snap = get_stats_snapshot()
         await send_message(
             f"🤖 *Status*\n"
             f"⏱ {d}h {h}j {m}m\n"
-            f"📥 {STATS['messages_received']} | 📤 {STATS['messages_sent']}\n"
-            f"📝 {STATS['tugas_checks']} | ✅ {STATS['presensi_done']}\n"
-            f"⚠ {STATS['errors']} | 📋 {active}\n"
+            f"📥 {snap['messages_received']} | 📤 {snap['messages_sent']}\n"
+            f"📝 {snap['tugas_checks']} | ✅ {snap['presensi_done']}\n"
+            f"⚠ {snap['errors']} | 📋 {active}\n"
             f"👥 {len(ALLOWED_CHAT_IDS)} user\n"
             f"🤖 {'Aktif' if get_autopilot() else 'Nonaktif'}"
         )
@@ -541,7 +543,7 @@ async def handle_command(text: str, chat_id: int | None = None):
 
     elif "tugas" in t or "cek tugas" in t:
         target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        STATS["tugas_checks"] += 1
+        inc_stat("tugas_checks")
         await send_message("⏳ Cek tugas...")
         tugas = await login_kulino_and_get_tugas(target)
         if tugas:
@@ -572,7 +574,7 @@ async def handle_command(text: str, chat_id: int | None = None):
         target = "pacar" if "azfa" in t or "pacar" in t else "saya"
         ok, msg = await do_presensi_siadin(target)
         if ok:
-            STATS["presensi_done"] += 1
+            inc_stat("presensi_done")
             await send_message(f"✅ Presensi {MHS_ACCOUNTS[target]['name']} berhasil!")
             await send_photo(SCREENSHOT_PRESENSI)
         else:
@@ -679,7 +681,6 @@ async def main():
     # Load chat IDs
     ALLOWED_CHAT_IDS = load_chat_ids()
     ALLOWED_CHAT_ID = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else None
-    set_default_chat_id(ALLOWED_CHAT_ID)
     logger.info(f"Chat IDs: {ALLOWED_CHAT_IDS}" if ALLOWED_CHAT_IDS else "Tunggu chat pertama...")
 
     # Start proactive
@@ -725,7 +726,7 @@ async def main():
                                 await send_message(f"⏳ Presensi {MHS_ACCOUNTS[who]['name']}...")
                                 ok, msg = await do_presensi_siadin(who)
                                 if ok:
-                                    STATS["presensi_done"] += 1
+                                    inc_stat("presensi_done")
                                     await send_message(f"✅ Presensi {MHS_ACCOUNTS[who]['name']} berhasil!")
                                     await send_photo(SCREENSHOT_PRESENSI)
                                 else:
@@ -743,20 +744,20 @@ async def main():
                         save_chat_id(chat_id)
                         ALLOWED_CHAT_IDS = [chat_id]
                         ALLOWED_CHAT_ID = chat_id
-                        set_default_chat_id(chat_id)
                     if chat_id not in ALLOWED_CHAT_IDS:
                         continue
 
-                    STATS["messages_received"] += 1
+                    inc_stat("messages_received")
                     logger.info(f"{chat_id}: {text}")
                     await handle_command(text, chat_id)
             except Exception as e:
-                STATS["errors"] += 1
+                inc_stat("errors")
                 logger.error(f"Polling error: {e}")
                 # Exponential backoff: 1, 2, 4, 8, 16, 32, max 60 detik
                 await asyncio.sleep(min(_polling_backoff, 60))
                 _polling_backoff = min(_polling_backoff * 2, 60)
     finally:
+        save_stats()
         instance_lock.release_lock()
         from browser import close_browser
         await close_browser()

@@ -442,7 +442,7 @@ def extract_tasks_from_text(body_text: str, body_html: str = "") -> list[dict]:
 
     # Pattern 2: "X is due" alone (deadline in next line or same line)
     if not results:
-        matches = re.findall(r"([A-Za-z][^\\n]{5,120})\s+is due", body_text)
+        matches = re.findall(r"([A-Za-z][^\n]{5,120})\s+is due", body_text)
         for name in matches:
             name_clean = name.strip()
             key = name_clean.lower()

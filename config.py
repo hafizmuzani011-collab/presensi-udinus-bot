@@ -1,6 +1,8 @@
 """Konfigurasi bot - credentials WAJIB dari .env, TIDAK ada fallback hardcoded."""
 import os
 import json
+import logging
+import threading
 from datetime import datetime
 
 def _load_env():
@@ -88,3 +90,30 @@ STATS = {
     "presensi_done": 0,
     "errors": 0,
 }
+STATS_LOCK = threading.Lock()
+
+
+def inc_stat(key: str, n: int = 1) -> None:
+    """Thread-safe increment STATS[key]."""
+    with STATS_LOCK:
+        STATS[key] = STATS.get(key, 0) + n
+
+
+def get_stats_snapshot() -> dict:
+    """Thread-safe copy of STATS for dashboard."""
+    with STATS_LOCK:
+        return dict(STATS)
+
+
+def save_stats() -> bool:
+    """Persist STATS to disk (atomic write)."""
+    try:
+        snapshot = get_stats_snapshot()
+        tmp = STATS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, indent=2)
+        os.replace(tmp, STATS_FILE)
+        return True
+    except OSError as e:
+        logging.getLogger("telegram_bot").error(f"Save stats gagal: {e}")
+        return False

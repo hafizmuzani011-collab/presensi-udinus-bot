@@ -27,13 +27,11 @@ from config import (
 # === Logger ===
 logger = logging.getLogger("telegram_bot")
 
-# === Auth token (env, dengan fallback dev) ===
-DASH_TOKEN = os.environ.get("DASH_TOKEN") or "presensi123"
-# JANGAN log token di production (info disclosure)
-if os.environ.get("DASH_TOKEN"):
-    logger.info("Dashboard token loaded from DASH_TOKEN env")
-else:
-    logger.warning("DASH_TOKEN env not set, using insecure default 'presensi123'")
+# === Auth token (WAJIB dari env) ===
+DASH_TOKEN = os.environ.get("DASH_TOKEN")
+if not DASH_TOKEN:
+    raise RuntimeError("DASH_TOKEN tidak ditemukan! Set environment variable DASH_TOKEN, atau isi di .env")
+logger.info("Dashboard token loaded from DASH_TOKEN env")
 
 app = Flask(__name__)
 
@@ -656,13 +654,13 @@ def status():
     log_errors = [l for l in read_file_lines(LOG_FILE, 200)
                   if re.search(r"\b(ERROR|CRITICAL)\b", l)][-5:]
 
-    from config import STATS
+    from config import get_stats_snapshot
     return jsonify({
         "uptime": get_uptime(),
         "waktu": now.strftime("%A, %d %B %Y %H:%M WIB"),
         "besok": esok.strftime("%A, %d %B %Y"),
         "autopilot": "Aktif" if CONTROL["autopilot"] else "Nonaktif",
-        "stat": STATS,
+        "stat": get_stats_snapshot(),
         "jadwal_hari_ini": {
             KULINO_ACCOUNTS["saya"]["name"]: [{"jam": j, "matkul": m, "ruang": r} for j, m, r in today_saya],
             KULINO_ACCOUNTS["pacar"]["name"]: [{"jam": j, "matkul": m, "ruang": r} for j, m, r in today_pacar],

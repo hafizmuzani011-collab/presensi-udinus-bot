@@ -3,38 +3,41 @@ import logging
 import os
 import httpx
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, inc_stat
 
 logger = logging.getLogger("telegram_bot")
-ALLOWED_CHAT_ID: int | None = None  # legacy, di-set dari bot.py
-_logged_in_403 = False
 
 
-def set_default_chat_id(chat_id: int | None) -> None:
-    global ALLOWED_CHAT_ID
-    ALLOWED_CHAT_ID = chat_id
+def _get_target_chat_ids(chat_ids: list[int] | None = None) -> list[int]:
+    if chat_ids:
+        return chat_ids
+    from config import ALLOWED_CHAT_IDS
+    return ALLOWED_CHAT_IDS
 
 
-async def send_message(text: str, parse_mode: str = "Markdown", reply_markup: dict | None = None) -> bool:
-    if not ALLOWED_CHAT_ID:
+async def send_message(text: str, parse_mode: str = "Markdown", reply_markup: dict | None = None,
+                       chat_ids: list[int] | None = None) -> bool:
+    targets = _get_target_chat_ids(chat_ids)
+    if not targets:
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": ALLOWED_CHAT_ID, "text": text, "parse_mode": parse_mode}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(url, json=payload)
-        if r.status_code == 200:
-            from config import STATS
-            STATS["messages_sent"] += 1
-            logger.info(f"Pesan terkirim ke {ALLOWED_CHAT_ID}")
-            return True
-        logger.error(f"Gagal kirim pesan: {r.status_code} {r.text[:200]}")
-        return False
-    except Exception as e:
-        logger.error(f"Koneksi error: {e}")
-        return False
+    success = False
+    async with httpx.AsyncClient(timeout=30) as client:
+        for chat_id in targets:
+            payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+            try:
+                r = await client.post(url, json=payload)
+                if r.status_code == 200:
+                    inc_stat("messages_sent")
+                    logger.info(f"Pesan terkirim ke {chat_id}")
+                    success = True
+                else:
+                    logger.error(f"Gagal kirim pesan ke {chat_id}: {r.status_code} {r.text[:200]}")
+            except Exception as e:
+                logger.error(f"Koneksi error ke {chat_id}: {e}")
+    return success
 
 
 def make_inline_keyboard(buttons: list[list[dict]]) -> dict:
@@ -73,26 +76,29 @@ async def edit_message(chat_id: int, message_id: int, text: str) -> bool:
         return False
 
 
-async def send_photo(photo_path: str) -> bool:
-    if not ALLOWED_CHAT_ID or not os.path.exists(photo_path):
+async def send_photo(photo_path: str, chat_ids: list[int] | None = None) -> bool:
+    targets = _get_target_chat_ids(chat_ids)
+    if not targets or not os.path.exists(photo_path):
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    try:
-        with open(photo_path, "rb") as f:
-            files = {"photo": (os.path.basename(photo_path), f, "image/png")}
-            data = {"chat_id": str(ALLOWED_CHAT_ID)}
-            async with httpx.AsyncClient(timeout=60) as client:
+    success = False
+    with open(photo_path, "rb") as f:
+        file_bytes = f.read()
+    async with httpx.AsyncClient(timeout=60) as client:
+        for chat_id in targets:
+            try:
+                files = {"photo": (os.path.basename(photo_path), file_bytes, "image/png")}
+                data = {"chat_id": str(chat_id)}
                 r = await client.post(url, data=data, files=files)
-        if r.status_code == 200:
-            from config import STATS
-            STATS["photos_sent"] += 1
-            logger.info(f"Foto terkirim")
-            return True
-        logger.error(f"Gagal kirim foto: {r.status_code}")
-        return False
-    except Exception as e:
-        logger.error(f"Gagal kirim foto: {e}")
-        return False
+                if r.status_code == 200:
+                    inc_stat("photos_sent")
+                    logger.info(f"Foto terkirim ke {chat_id}")
+                    success = True
+                else:
+                    logger.error(f"Gagal kirim foto ke {chat_id}: {r.status_code}")
+            except Exception as e:
+                logger.error(f"Gagal kirim foto ke {chat_id}: {e}")
+    return success
 
 
 async def get_updates(offset: int | None = None) -> list:
