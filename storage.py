@@ -13,7 +13,7 @@ from config import (
     PRESENSI_DONE_FILE,
 )
 
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 
 # ============ Chat ID ============

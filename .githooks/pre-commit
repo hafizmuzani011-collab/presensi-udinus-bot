@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-commit hook: run tests before allowing commit.
+# Aborts commit if any test fails.
+exec 1>&2
+echo "Running tests..."
+cd "$(git rev-parse --show-toplevel)" || exit 1
+python -m pytest test/ -q --tb=line 2>&1 || {
+    echo "FAILED: Tests must pass before commit."
+    echo "Use 'git commit --no-verify' to bypass."
+    exit 1
+}

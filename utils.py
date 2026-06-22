@@ -159,7 +159,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
         }
         dirty = True
         import logging
-        logging.getLogger("telegram_bot").info(f"Deadline: {task_key} -> {parsed}")
+        logging.getLogger(__name__).info(f"Deadline: {task_key} -> {parsed}")
 
     for task_key, data in cache.items():
         if task_key == "notified":

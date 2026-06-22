@@ -1,11 +1,36 @@
-"""Telegram API client - async, tidak block event loop."""
+"""Telegram API client - async, tidak block event loop.
+
+Reuse single AsyncClient across all calls (HTTP/2 keep-alive).
+"""
 import logging
 import os
 import httpx
 
 from config import BOT_TOKEN, inc_stat
 
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
+
+# Shared client (HTTP/2 keep-alive, connection pool)
+_client: httpx.AsyncClient | None = None
+
+
+async def _get_client(timeout: float = 30.0) -> httpx.AsyncClient:
+    """Lazy-init shared AsyncClient."""
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=timeout,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _client
+
+
+async def close_client() -> None:
+    """Close shared client (call saat shutdown)."""
+    global _client
+    if _client and not _client.is_closed:
+        await _client.aclose()
+        _client = None
 
 
 def _get_target_chat_ids(chat_ids: list[int] | None = None) -> list[int]:
@@ -22,21 +47,21 @@ async def send_message(text: str, parse_mode: str = "Markdown", reply_markup: di
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     success = False
-    async with httpx.AsyncClient(timeout=30) as client:
-        for chat_id in targets:
-            payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-            if reply_markup:
-                payload["reply_markup"] = reply_markup
-            try:
-                r = await client.post(url, json=payload)
-                if r.status_code == 200:
-                    inc_stat("messages_sent")
-                    logger.info(f"Pesan terkirim ke {chat_id}")
-                    success = True
-                else:
-                    logger.error(f"Gagal kirim pesan ke {chat_id}: {r.status_code} {r.text[:200]}")
-            except Exception as e:
-                logger.error(f"Koneksi error ke {chat_id}: {e}")
+    client = await _get_client(30)
+    for chat_id in targets:
+        payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            r = await client.post(url, json=payload)
+            if r.status_code == 200:
+                inc_stat("messages_sent")
+                logger.info(f"Pesan terkirim ke {chat_id}")
+                success = True
+            else:
+                logger.error(f"Gagal kirim pesan ke {chat_id}: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            logger.error(f"Koneksi error ke {chat_id}: {e}")
     return success
 
 
@@ -53,8 +78,8 @@ async def answer_callback(callback_query_id: str, text: str = "") -> bool:
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(url, json={"callback_query_id": callback_query_id, "text": text})
+        client = await _get_client(10)
+        r = await client.post(url, json={"callback_query_id": callback_query_id, "text": text})
         return r.status_code == 200
     except Exception:
         return False
@@ -66,11 +91,11 @@ async def edit_message(chat_id: int, message_id: int, text: str) -> bool:
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(url, json={
-                "chat_id": chat_id, "message_id": message_id,
-                "text": text, "parse_mode": "Markdown"
-            })
+        client = await _get_client(15)
+        r = await client.post(url, json={
+            "chat_id": chat_id, "message_id": message_id,
+            "text": text, "parse_mode": "Markdown"
+        })
         return r.status_code == 200
     except Exception:
         return False
@@ -84,20 +109,20 @@ async def send_photo(photo_path: str, chat_ids: list[int] | None = None) -> bool
     success = False
     with open(photo_path, "rb") as f:
         file_bytes = f.read()
-    async with httpx.AsyncClient(timeout=60) as client:
-        for chat_id in targets:
-            try:
-                files = {"photo": (os.path.basename(photo_path), file_bytes, "image/png")}
-                data = {"chat_id": str(chat_id)}
-                r = await client.post(url, data=data, files=files)
-                if r.status_code == 200:
-                    inc_stat("photos_sent")
-                    logger.info(f"Foto terkirim ke {chat_id}")
-                    success = True
-                else:
-                    logger.error(f"Gagal kirim foto ke {chat_id}: {r.status_code}")
-            except Exception as e:
-                logger.error(f"Gagal kirim foto ke {chat_id}: {e}")
+    client = await _get_client(60)
+    for chat_id in targets:
+        try:
+            files = {"photo": (os.path.basename(photo_path), file_bytes, "image/png")}
+            data = {"chat_id": str(chat_id)}
+            r = await client.post(url, data=data, files=files)
+            if r.status_code == 200:
+                inc_stat("photos_sent")
+                logger.info(f"Foto terkirim ke {chat_id}")
+                success = True
+            else:
+                logger.error(f"Gagal kirim foto ke {chat_id}: {r.status_code}")
+        except Exception as e:
+            logger.error(f"Gagal kirim foto ke {chat_id}: {e}")
     return success
 
 
@@ -107,8 +132,8 @@ async def get_updates(offset: int | None = None) -> list[dict]:
     if offset:
         params["offset"] = offset
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.get(url, params=params)
+        client = await _get_client(60)
+        r = await client.get(url, params=params)
         if r.status_code == 200:
             return r.json().get("result", [])
         logger.error(f"getUpdates: {r.status_code} {r.text[:200]}")

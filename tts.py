@@ -8,7 +8,7 @@ import os
 import tempfile
 from datetime import datetime
 
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 try:
     import edge_tts

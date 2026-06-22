@@ -10,7 +10,7 @@ import os
 import re
 from datetime import datetime
 
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 KULINO_URL = "https://kulino.dinus.ac.id/"
 MHS_URL = "https://mhs.dinus.ac.id/"

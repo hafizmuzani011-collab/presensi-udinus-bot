@@ -148,7 +148,7 @@ class TestPresensi:
     @pytest.mark.asyncio
     async def test_presensi_saya(self, mock_send, mock_presensi, mock_holiday, monkeypatch):
         monkeypatch.setattr("bot.do_presensi_siadin", mock_presensi)
-        monkeypatch.setattr("os.path.exists", lambda _: False)  # no screenshot
+        monkeypatch.setattr("config.SCREENSHOT_PRESENSI", "/nonexistent/screenshot.png")
         with patch("bot.send_message", mock_send):
             from bot import handle_command
             await handle_command("presensi")
@@ -158,7 +158,7 @@ class TestPresensi:
     @pytest.mark.asyncio
     async def test_presensi_pacar(self, mock_send, mock_presensi, mock_holiday, monkeypatch):
         monkeypatch.setattr("bot.do_presensi_siadin", mock_presensi)
-        monkeypatch.setattr("os.path.exists", lambda _: False)
+        monkeypatch.setattr("config.SCREENSHOT_PRESENSI", "/nonexistent/screenshot.png")
         with patch("bot.send_message", mock_send):
             from bot import handle_command
             await handle_command("presensi pacar")

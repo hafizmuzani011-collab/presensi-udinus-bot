@@ -103,5 +103,5 @@ def save_stats() -> bool:
         os.replace(tmp, STATS_FILE)
         return True
     except OSError as e:
-        logging.getLogger("telegram_bot").error(f"Save stats gagal: {e}")
+        logging.getLogger(__name__).error(f"Save stats gagal: {e}")
         return False

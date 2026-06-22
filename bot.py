@@ -89,7 +89,7 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 # Bot state
 ALLOWED_CHAT_ID = None
@@ -772,6 +772,8 @@ async def main() -> None:
         instance_lock.release_lock()
         from browser import close_browser
         await close_browser()
+        from tg import close_client
+        await close_client()
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ jobs:
           MHS_SAYA_PASS: test
           MHS_PACAR_NIM: test
           MHS_PACAR_PASS: test
-          DASH_TOKEN: test
+          DASH_TOKEN: presensi123
 
       - name: Generate summary
         if: always()

@@ -26,7 +26,7 @@ from config import (
 )
 
 # === Logger ===
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 # === Auth token (WAJIB dari env) ===
 DASH_TOKEN = os.environ.get("DASH_TOKEN")

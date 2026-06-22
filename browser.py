@@ -4,7 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-logger = logging.getLogger("telegram_bot")
+logger = logging.getLogger(__name__)
 
 # Global state
 _playwright = None
