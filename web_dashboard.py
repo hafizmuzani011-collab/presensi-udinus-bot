@@ -376,6 +376,8 @@ const TOKEN={json.dumps(token)};
 let currentData=null;
 let calOffset=0;
 
+function esc(s){{return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}}
+
 function g(id){{document.getElementById(id)?.scrollIntoView({{behavior:'smooth'}});}}
 function ap(p,m){{return fetch(p+'?token='+TOKEN,{{method:m||'GET'}}).then(r=>r.ok?r.json():{{}}).catch(e=>({{}}));}}
 function notify(msg,type='info'){{
@@ -435,9 +437,9 @@ if(sw)sw.innerHTML=
 var t=document.getElementById('at');
 if(t){{if(on){{t.style.background='#059669';t.children[0].style.transform='translateX(20px)';}}else{{t.style.background='#d1d5db';t.children[0].style.transform='';}}}}
 var j=s.jadwal_hari_ini,h='',cnt=0;
-if(j)for(var n in j){{h+='<div class="px-6 py-3 border-b border-gray-100"><div class="text-xs font-semibold text-gray-500 uppercase mb-2">'+n+'</div>';
+if(j)for(var n in j){{h+='<div class="px-6 py-3 border-b border-gray-100"><div class="text-xs font-semibold text-gray-500 uppercase mb-2">'+esc(n)+'</div>';
 if(j[n].length===0)h+='<p class="text-sm text-gray-400 italic px-1 pb-2">Libur</p>';
-else {{for(var x of j[n]){{h+='<div class="flex items-center gap-3 py-1.5"><div class="w-12 h-10 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center text-xs font-bold shrink-0">'+(x.jam||'').split('-')[0]+'</div><div><div class="text-sm font-medium">'+x.matkul+'</div><div class="text-xs text-gray-500">'+x.ruang+'</div></div></div>';cnt++;}}}}
+else {{for(var x of j[n]){{h+='<div class="flex items-center gap-3 py-1.5"><div class="w-12 h-10 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center text-xs font-bold shrink-0">'+esc((x.jam||'').split('-')[0])+'</div><div><div class="text-sm font-medium">'+esc(x.matkul)+'</div><div class="text-xs text-gray-500">'+esc(x.ruang)+'</div></div></div>';cnt++;}}}}
 h+='</div>';}}
 document.getElementById('jw').innerHTML=h||'<p class="px-6 py-4 text-sm text-gray-400 italic">Data tidak tersedia</p>';
 document.getElementById('jadwalCount').textContent=cnt;
@@ -490,13 +492,13 @@ var el=document.getElementById('deadlineFull');
 if(!el)return;
 document.getElementById('deadlineCount').textContent=f.length;
 if(!f.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Tidak ada deadline</p>';return;}}
-el.innerHTML=f.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+i.name+'</div><div class="text-xs text-gray-500 mt-0.5">'+i.account+'</div></div><div class="text-sm font-semibold">'+(i.deadline||'').split('(')[0]+'</div></div>';}}).join('');
+el.innerHTML=f.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+esc(i.name)+'</div><div class="text-xs text-gray-500 mt-0.5">'+esc(i.account)+'</div></div><div class="text-sm font-semibold">'+esc((i.deadline||'').split('(')[0])+'</div></div>';}}).join('');
 }}
 function renderDeadline(items){{
 var el=document.getElementById('dw');
 if(!el)return;
 if(!items||!items.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Tidak ada deadline aktif</p>';return;}}
-el.innerHTML=items.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+i.name+'</div><div class="text-xs text-gray-500 mt-0.5">'+i.account+'</div></div><div class="text-sm font-semibold">'+(i.deadline||'').split('(')[0]+'</div></div>';}}).join('');
+el.innerHTML=items.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+esc(i.name)+'</div><div class="text-xs text-gray-500 mt-0.5">'+esc(i.account)+'</div></div><div class="text-sm font-semibold">'+esc((i.deadline||'').split('(')[0])+'</div></div>';}}).join('');
 }}
 function doSearch(){{
 if(currentData?.deadline?.items){{doSearchWith(currentData.deadline.items);}}
@@ -507,7 +509,7 @@ function renderLogFull(){{
 var s=currentData;
 var el=document.getElementById('logFull');
 if(!s||!s.log_errors||!s.log_errors.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Tidak ada error</p>';return;}}
-el.innerHTML=s.log_errors.map(function(l){{return'<div class="flex items-start gap-3 py-2 border-b border-gray-100"><div class="w-2 h-2 bg-red-500 rounded-full mt-1.5 shrink-0"></div><div><p class="text-xs text-gray-500">'+new Date().toLocaleTimeString('id-ID')+'</p><p class="text-sm">'+l+'</p></div></div>';}}).join('');
+el.innerHTML=s.log_errors.map(function(l){{return'<div class="flex items-start gap-3 py-2 border-b border-gray-100"><div class="w-2 h-2 bg-red-500 rounded-full mt-1.5 shrink-0"></div><div><p class="text-xs text-gray-500">'+new Date().toLocaleTimeString('id-ID')+'</p><p class="text-sm">'+esc(l)+'</p></div></div>';}}).join('');
 }}
 
 function renderSettings(){{
@@ -554,11 +556,11 @@ document.getElementById('lbPct').textContent=r.stats.pct+'%';
 if(!r.days.length){{document.getElementById('logbookList').innerHTML='<p class="text-sm text-gray-400 italic">Logbook kosong</p>';return;}}
 var h='';
 r.days.forEach(function(d){{
-h+='<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-sm font-semibold text-gray-700 mb-3">📅 '+d.date+'</div>';
+h+='<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-sm font-semibold text-gray-700 mb-3">📅 '+esc(d.date)+'</div>';
 d.entries.forEach(function(e){{
 var icon=e.status==='hadir'?'✅':'❌';
 var color=e.status==='hadir'?'text-green-700':'text-red-700';
-h+='<div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><div class="flex items-center gap-3"><span class="text-lg">'+icon+'</span><div><div class="text-sm font-medium text-gray-900">'+e.matkul+'</div><div class="text-xs text-gray-500">Ruang '+e.ruang+' • '+(e.account==="saya"?"Hafizh":"Azfa")+'</div></div></div><div class="text-sm font-mono '+color+'">'+e.jam+'</div></div>';
+h+='<div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><div class="flex items-center gap-3"><span class="text-lg">'+icon+'</span><div><div class="text-sm font-medium text-gray-900">'+esc(e.matkul)+'</div><div class="text-xs text-gray-500">Ruang '+esc(e.ruang)+' • '+(e.account==="saya"?"Hafizh":"Azfa")+'</div></div></div><div class="text-sm font-mono '+color+'">'+esc(e.jam)+'</div></div>';
 }});
 h+='</div>';
 }});
@@ -569,7 +571,7 @@ async function renderHistory(){{
 var el=document.getElementById('historyList');
 var h=await ap('/history/data');
 if(!h||!h.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Belum ada presensi tercatat</p>';return;}}
-el.innerHTML=h.slice().reverse().map(function(x){{return'<div class="flex items-center justify-between p-3 mb-2 border border-gray-200 rounded-lg"><div><div class="text-sm font-medium">'+x.matkul+'</div><div class="text-xs text-gray-500 mt-0.5">'+x.account+' • '+x.ruang+'</div></div><div class="text-right"><div class="text-sm font-semibold">'+x.tanggal+'</div><div class="text-xs text-gray-500">'+x.jam+'</div></div></div>';}}).join('');
+el.innerHTML=h.slice().reverse().map(function(x){{return'<div class="flex items-center justify-between p-3 mb-2 border border-gray-200 rounded-lg"><div><div class="text-sm font-medium">'+esc(x.matkul)+'</div><div class="text-xs text-gray-500 mt-0.5">'+esc(x.account)+' • '+esc(x.ruang)+'</div></div><div class="text-right"><div class="text-sm font-semibold">'+esc(x.tanggal)+'</div><div class="text-xs text-gray-500">'+esc(x.jam)+'</div></div></div>';}}).join('');
 }}
 
 async function renderCalendar(){{

@@ -107,7 +107,7 @@ async def get_updates(offset: int | None = None) -> list:
     if offset:
         params["offset"] = offset
     try:
-        async with httpx.AsyncClient(timeout=35) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             r = await client.get(url, params=params)
         if r.status_code == 200:
             return r.json().get("result", [])
