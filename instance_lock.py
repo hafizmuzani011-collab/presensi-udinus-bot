@@ -12,13 +12,17 @@ OFFSET_FILE = "telegram_offset.json"
 
 def acquire_lock() -> bool:
     """Cegah multiple instance. Kill process lama kalau perlu."""
+    my_pid = os.getpid()
     if os.path.exists(LOCK_FILE):
         try:
             old_pid = int(Path(LOCK_FILE).read_text().strip())
+            if old_pid == my_pid:
+                return True
             if psutil.pid_exists(old_pid):
                 try:
                     p = psutil.Process(old_pid)
-                    if p.name().lower().startswith("python"):
+                    cmdline = " ".join(p.cmdline()).lower() if p.cmdline() else ""
+                    if "bot.py" in cmdline or "instance_lock" in cmdline or "python" in cmdline:
                         print(f"Bot lama PID {old_pid} masih jalan. Menghentikan...")
                         p.terminate()
                         try:
@@ -31,8 +35,11 @@ def acquire_lock() -> bool:
                     pass
         except (ValueError, OSError):
             pass
+    # Atomic write: tulis ke temp dulu, lalu rename
+    tmp = LOCK_FILE + ".tmp"
     try:
-        Path(LOCK_FILE).write_text(str(os.getpid()))
+        Path(tmp).write_text(str(my_pid))
+        os.replace(tmp, LOCK_FILE)
         return True
     except OSError as e:
         print(f"Gagal tulis lock file: {e}")

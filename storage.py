@@ -9,6 +9,7 @@ from typing import Any
 from config import (
     CHAT_ID_FILE, LOCK_FILE, OFFSET_FILE,
     SCHEDULES_FILE, TASKS_DEADLINE_FILE, LOG_DIR,
+    PRESENSI_DONE_FILE,
 )
 
 
@@ -159,3 +160,26 @@ def write_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang:
             dt = datetime.fromisoformat(date_str)
             f.write(f"## {dt.strftime('%A, %d %B %Y')}\n\n")
         f.write(line)
+
+
+# ============ Presensi Done (persist across restart) ============
+def load_presensi_done() -> dict:
+    """Load {_date, keys: [...]}. Auto-reset jika tanggal berbeda."""
+    if not os.path.exists(PRESENSI_DONE_FILE):
+        return {"date": "", "keys": []}
+    try:
+        with open(PRESENSI_DONE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {"date": "", "keys": []}
+
+
+def save_presensi_done(date_str: str, keys: set) -> None:
+    """Simpan sesi presensi yang sudah selesai. Auto-reset besoknya."""
+    try:
+        tmp = PRESENSI_DONE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"date": date_str, "keys": sorted(keys)}, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, PRESENSI_DONE_FILE)
+    except OSError:
+        pass

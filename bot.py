@@ -103,6 +103,25 @@ async def update_schedules_from_mhs() -> tuple[bool, str]:
 # ============ Proactive Loop ============
 _tugas_checked_today: str | None = None
 _presensi_done: set = set()
+_presensi_done_date: str = ""
+
+def _load_presensi_done_for_today(today_str: str) -> set:
+    """Load presensi_done keys. Reset kalau tanggal ganti (hari baru)."""
+    from storage import load_presensi_done
+    global _presensi_done, _presensi_done_date
+    data = load_presensi_done()
+    if data.get("date") != today_str:
+        _presensi_done = set()
+        _presensi_done_date = today_str
+    else:
+        _presensi_done = set(data.get("keys", []))
+        _presensi_done_date = today_str
+    return _presensi_done
+
+def _save_presensi_done(today_str: str) -> None:
+    """Persist ke file."""
+    from storage import save_presensi_done
+    save_presensi_done(today_str, _presensi_done)
 
 async def proactive_check():
     global _tugas_checked_today, _presensi_done
@@ -114,6 +133,9 @@ async def proactive_check():
             day_name = now.strftime("%A").lower()
             hari_id = {"monday":"senin","tuesday":"selasa","wednesday":"rabu",
                        "thursday":"kamis","friday":"jumat","saturday":"sabtu","sunday":"minggu"}.get(day_name, "")
+
+            # Load presensi_done persistent (auto-reset kalau ganti hari)
+            _load_presensi_done_for_today(today_str)
 
             # === Web dashboard trigger (single source of truth) ===
             if not DASH_CONTROL.get("autopilot"):
@@ -194,6 +216,7 @@ async def proactive_check():
                         end_min = h_end * 60 + m_end
                         if start_min <= now_min < end_min:
                             _presensi_done.add(sesi_key)
+                            _save_presensi_done(today_str)
                             logger.info(f"Presensi: {who} - {mk}")
                             await send_message(f"🤖 Presensi {MHS_ACCOUNTS[who]['name']} - {mk} {jam}")
                             ok, msg = await do_presensi_siadin(who)
