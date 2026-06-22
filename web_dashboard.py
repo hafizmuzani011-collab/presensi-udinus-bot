@@ -8,10 +8,8 @@ import json
 import logging
 import os
 import re
-import secrets
 import threading
 from datetime import datetime, timedelta
-from functools import wraps
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, abort, Response
 
@@ -22,7 +20,8 @@ ROOT = Path(__file__).parent
 from config import (
     LOG_FILE, TASKS_DEADLINE_FILE, SCHEDULES_FILE,
     SCREENSHOT_TUGAS, SCREENSHOT_PRESENSI,
-    KULINO_ACCOUNTS, MHS_ACCOUNTS, BOT_START_TIME, LOG_DIR,
+    KULINO_ACCOUNTS, BOT_START_TIME, LOG_DIR,
+    get_stats_snapshot,
 )
 
 # === Logger ===
@@ -891,6 +890,30 @@ self.addEventListener('fetch',e=>{
     e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
 });
 """, mimetype="application/javascript")
+
+
+# === Health check (no auth — untuk monitoring eksternal) ===
+@app.route("/health")
+def health():
+    """Public health endpoint — untuk monitoring / load balancer."""
+    now = datetime.now()
+    try:
+        delta = now - BOT_START_TIME
+        d, r = delta.days, delta.seconds
+        uptime = f"{d}h {r//3600}j {(r%3600)//60}m"
+    except Exception:
+        uptime = "?"
+    try:
+        stat = get_stats_snapshot()
+    except Exception:
+        stat = {}
+    return jsonify({
+        "status": "ok",
+        "uptime": uptime,
+        "autopilot": bool(get_control("autopilot")),
+        "stat": stat,
+        "timestamp": now.isoformat(),
+    })
 
 
 # === History presensi ===

@@ -5,12 +5,11 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from config import (
-    CHAT_ID_FILE, LOCK_FILE, OFFSET_FILE,
+    CHAT_ID_FILE, OFFSET_FILE,
     SCHEDULES_FILE, TASKS_DEADLINE_FILE, LOG_DIR,
-    PRESENSI_DONE_FILE,
+    PRESENSI_DONE_FILE, PRESENSI_HISTORY_FILE,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,8 +66,29 @@ def load_offset() -> int | None:
 def load_schedules() -> dict:
     if not os.path.exists(SCHEDULES_FILE):
         return {}
-    with open(SCHEDULES_FILE) as f:
-        return json.load(f)
+    try:
+        with open(SCHEDULES_FILE) as f:
+            data = json.load(f)
+        # Validasi schema: harus dict of dict of list
+        if not isinstance(data, dict):
+            logger.warning(f"{SCHEDULES_FILE}: invalid type, reset")
+            return {}
+        for who, days in data.items():
+            if not isinstance(days, dict):
+                logger.warning(f"{SCHEDULES_FILE}: {who} not a dict, reset")
+                return {}
+            for day, slots in days.items():
+                if not isinstance(slots, list):
+                    logger.warning(f"{SCHEDULES_FILE}: {who}/{day} not a list, reset")
+                    return {}
+                for slot in slots:
+                    if not isinstance(slot, list) or len(slot) != 3:
+                        logger.warning(f"{SCHEDULES_FILE}: {who}/{day} invalid slot, reset")
+                        return {}
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"{SCHEDULES_FILE} corrupt, reset: {e}")
+        return {}
 
 
 # ============ Tasks Deadlines ============
@@ -90,13 +110,29 @@ def save_tasks_deadlines(data: dict) -> None:
 
 def backup_tasks_deadlines() -> bool:
     """Buat backup .bak. Return True kalau berhasil."""
-    if not os.path.exists(TASKS_DEADLINE_FILE):
+    return backup_file(TASKS_DEADLINE_FILE)
+
+
+def backup_file(path: str) -> bool:
+    """Generic: backup file ke .bak. Return True kalau berhasil."""
+    if not os.path.exists(path):
         return False
     try:
-        shutil.copy2(TASKS_DEADLINE_FILE, TASKS_DEADLINE_FILE + ".bak")
+        shutil.copy2(path, path + ".bak")
         return True
     except OSError:
         return False
+
+
+def run_backup() -> int:
+    """Backup semua file critical. Return jumlah file yg di-backup."""
+    count = 0
+    for path in [TASKS_DEADLINE_FILE, SCHEDULES_FILE, PRESENSI_HISTORY_FILE]:
+        if backup_file(path):
+            count += 1
+    if count:
+        logger.info(f"Backup: {count} file")
+    return count
 
 
 def cleanup_expired_deadlines() -> int:

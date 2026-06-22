@@ -11,15 +11,14 @@ from datetime import datetime, timedelta
 
 import instance_lock
 from config import (
-    KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, MHS_URL,
-    LOG_FILE, LOG_DIR, STATS_FILE, SCREENSHOT_PRESENSI, SCREENSHOT_TUGAS,
+    KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, LOG_DIR, STATS_FILE, SCREENSHOT_PRESENSI, SCREENSHOT_TUGAS,
     SCHEDULES_FILE, BOT_TOKEN, ALLOWED_CHAT_IDS,
     get_stats_snapshot, save_stats, inc_stat,
 )
 from storage import (
     load_chat_ids, save_chat_id, load_offset, save_offset,
     load_schedules, load_tasks_deadlines, save_tasks_deadlines,
-    backup_tasks_deadlines, write_logbook, cleanup_expired_deadlines,
+    run_backup, write_logbook, cleanup_expired_deadlines,
     load_presensi_done, save_presensi_done,
 )
 from tg import send_message, send_photo, get_updates, make_inline_keyboard, answer_callback
@@ -278,8 +277,7 @@ async def proactive_check() -> None:
 
             # === Auto backup setiap jam - INDEPENDENT dari autopilot ===
             if minute == 0:
-                if backup_tasks_deadlines():
-                    logger.info("Backup tasks_deadlines.json OK")
+                run_backup()
                 save_stats()
 
             # === Reminder 30 menit sebelum kelas (INDEPENDENT dari autopilot) ===
@@ -566,7 +564,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
             if os.path.exists(SCREENSHOT_TUGAS):
                 await send_photo(SCREENSHOT_TUGAS)
         else:
-            await send_message(f"📭 Tidak ada tugas aktif.")
+            await send_message("📭 Tidak ada tugas aktif.")
         await process_and_remind_deadlines(tugas, target, send_message)
 
     elif "autopilot" in t:
@@ -617,7 +615,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
                     )
                 await send_message("\n\n".join(lines))
             else:
-                await send_message(f"📭 Belum ada jadwal ujian.")
+                await send_message("📭 Belum ada jadwal ujian.")
         except Exception as e:
             logger.error(f"ujian error: {e}")
             await send_message(f"❌ Gagal cek jadwal ujian: {e}")
@@ -642,7 +640,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
             day_id = {"monday":"Senin","tuesday":"Selasa","wednesday":"Rabu","thursday":"Kamis","friday":"Jumat","saturday":"Sabtu","sunday":"Minggu"}.get(dt.strftime("%A").lower(), "?")
             upcoming.append(f"  {day_id}, {date_str}: {name}")
 
-        msg_parts.append(f"📅 *Libur 2026 (sisa)*")
+        msg_parts.append("📅 *Libur 2026 (sisa)*")
         msg_parts.extend(upcoming[:15])
         await send_message("\n".join(msg_parts))
 

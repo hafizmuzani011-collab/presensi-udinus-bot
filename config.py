@@ -23,6 +23,7 @@ SCREENSHOT_PRESENSI = "bukti_presensi.png"
 LOCK_FILE = "bot.lock"
 OFFSET_FILE = "telegram_offset.json"
 PRESENSI_DONE_FILE = "presensi_done.json"
+PRESENSI_HISTORY_FILE = "presensi_history.json"
 
 # ==== URLs ====
 KULINO_URL = "https://kulino.dinus.ac.id/"

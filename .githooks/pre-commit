@@ -1,11 +1,26 @@
 #!/bin/sh
-# Pre-commit hook: run tests before allowing commit.
-# Aborts commit if any test fails.
+# Pre-commit hook: lint + test before commit.
 exec 1>&2
-echo "Running tests..."
+FAILED=0
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+echo "Checking syntax..."
+python -m py_compile bot.py config.py storage.py utils.py tg.py telegram_bot.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "SYNTAX FAILED"; FAILED=1; }
+python -m py_compile test/*.py 2>&1 || { echo "TEST SYNTAX FAILED"; FAILED=1; }
+
+if command -v ruff >/dev/null; then
+    echo "Running ruff lint (unused imports/vars only)..."
+    python -m ruff check --select=F401,F841 bot.py config.py storage.py utils.py tg.py telegram_bot.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "LINT FAILED"; FAILED=1; }
+fi
+
+echo "Running tests..."
 python -m pytest test/ -q --tb=line 2>&1 || {
     echo "FAILED: Tests must pass before commit."
+    FAILED=1
+}
+
+if [ "$FAILED" = "1" ]; then
     echo "Use 'git commit --no-verify' to bypass."
     exit 1
-}
+fi
+echo "OK: lint + tests passed."

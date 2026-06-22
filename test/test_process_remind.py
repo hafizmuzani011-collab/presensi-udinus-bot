@@ -179,6 +179,24 @@ class TestNoReminder:
         assert len(send.calls) == 0
 
 
+class TestDedup:
+    def test_task_same_name_different_course(self, fixed_now):
+        """Dua tugas beda course tapi nama sama → harus deduplikasi."""
+        # This is actually a known limitation: task_key = "account:name"
+        # without course prefix. Test documents the behavior.
+        tasks = [
+            {"name": "Tugas UTS", "course": "Basis Data",
+             "deadline": "27 June 2026 12:30 PM"},
+            {"name": "Tugas UTS", "course": "Jaringan",
+             "deadline": "30 June 2026 11:59 PM"},
+        ]
+        send = make_send_recorder()
+        asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
+        cache = json.loads(Path("tasks_deadlines.json").read_text())
+        # Key is "saya:Tugas UTS" — second task overwrites first
+        assert "saya:Tugas UTS" in cache
+
+
 def asyncio_run(coro):
     import asyncio
     return asyncio.run(coro)

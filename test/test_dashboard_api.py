@@ -65,3 +65,18 @@ class TestRateLimit:
     def test_no_token(self, client):
         resp = client.post("/control/trigger-tugas")
         assert resp.status_code == 401
+
+
+class TestHealth:
+    def test_health_returns_ok(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["status"] == "ok"
+        assert "uptime" in data
+        assert "autopilot" in data
+
+    def test_health_no_auth_required(self, client):
+        # Health endpoint should be public (no token needed)
+        resp = client.get("/health?token=wrong")
+        assert resp.status_code == 200

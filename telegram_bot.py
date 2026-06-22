@@ -4,11 +4,8 @@ Menggantikan fungsi scraping di bot.py dengan selector CSS yang lebih robust
 dan LLM fallback untuk interpretasi halaman yang kompleks.
 """
 
-import json
 import logging
-import os
 import re
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +37,7 @@ async def scrape_kulino_tugas(page, kulino_akun: dict) -> list[dict]:
             logger.info(f"Timeline ditemukan via selector: {sel}")
             break
 
-    logger.info(f"Login Kulino berhasil, navigasi ke Upcoming Events...")
+    logger.info("Login Kulino berhasil, navigasi ke Upcoming Events...")
     
     # Navigasi ke Upcoming Events untuk screenshot
     try:
@@ -365,7 +362,7 @@ async def _verify_presensi_success(page) -> tuple[bool, str]:
                 return states;
             }""")
             if "HADIR" in card_state:
-                return True, f"card state: HADIR detected"
+                return True, "card state: HADIR detected"
         except Exception:
             pass
 

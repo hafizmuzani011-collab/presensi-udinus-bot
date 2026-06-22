@@ -2,10 +2,8 @@
 Pakai edge-tts (Microsoft Edge neural voices, gratis).
 Output .mp3, kirim via Telegram sendVoice.
 """
-import asyncio
 import logging
 import os
-import tempfile
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

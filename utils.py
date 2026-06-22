@@ -2,7 +2,6 @@
 import re
 from datetime import datetime, timedelta
 
-from config import SCHEDULES_FILE, KULINO_ACCOUNTS, SCREENSHOT_TUGAS
 from storage import load_schedules, load_tasks_deadlines, save_tasks_deadlines
 
 HARI_ID = {
@@ -189,7 +188,6 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                 try:
                     from tts import text_to_voice, EDGE_TTS_AVAILABLE
                     if EDGE_TTS_AVAILABLE:
-                        import asyncio
                         voice_text = f"Hai kak {data['account']}, tugas {data['name']} deadline tinggal {int(hours)} jam lagi, jangan lupa dikerjakan ya!"
                         p = await text_to_voice(voice_text)
                 except Exception:

@@ -9,7 +9,6 @@ User bisa tanya dengan bahasa sehari-hari:
 """
 import re
 from datetime import datetime, timedelta
-from typing import Any, Optional
 
 HARI = {
     "senin": "senin", "selasa": "selasa", "rabu": "rabu",

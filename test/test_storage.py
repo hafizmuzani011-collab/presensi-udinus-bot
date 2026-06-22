@@ -10,7 +10,8 @@ from storage import (
     load_offset, save_offset,
     cleanup_expired_deadlines,
     load_tasks_deadlines, save_tasks_deadlines,
-    backup_tasks_deadlines,
+    backup_tasks_deadlines, run_backup, backup_file,
+    load_schedules,
 )
 
 
@@ -144,3 +145,41 @@ class TestTasksDeadlines:
     def test_corrupt_file(self):
         Path("tasks_deadlines.json").write_text("not json")
         assert load_tasks_deadlines() == {"notified": {}}
+
+
+class TestSchedulesValidation:
+    def test_valid(self):
+        data = {"saya": {"senin": [["07:00", "Basis Data", "D.2.J"]]}}
+        Path("schedules.json").write_text(json.dumps(data))
+        assert load_schedules() == data
+
+    def test_corrupt_json(self):
+        Path("schedules.json").write_text("not json")
+        assert load_schedules() == {}
+
+    def test_invalid_type(self):
+        Path("schedules.json").write_text("[]")  # not dict
+        assert load_schedules() == {}
+
+    def test_invalid_slot(self):
+        Path("schedules.json").write_text('{"saya": {"senin": ["bad"]}}')
+        assert load_schedules() == {}
+
+
+class TestRunBackup:
+    def test_run_backup_all(self):
+        Path("tasks_deadlines.json").write_text(json.dumps({"notified": {}}))
+        Path("schedules.json").write_text(json.dumps({"saya": {}}))
+        Path("presensi_history.json").write_text(json.dumps([]))
+        count = run_backup()
+        assert count == 3
+        assert Path("tasks_deadlines.json.bak").exists()
+        assert Path("schedules.json.bak").exists()
+        assert Path("presensi_history.json.bak").exists()
+
+    def test_run_backup_missing_files(self):
+        count = run_backup()
+        assert count == 0
+
+    def test_backup_file_missing(self):
+        assert backup_file("/nonexistent/file.json") is False
