@@ -59,15 +59,15 @@ def parse_question(text: str) -> dict:
         if result["intent"] == "unknown" and any(w in text for w in ["besok", "lusa", "hari ini"]):
             result["intent"] = "jadwal"
 
-    # Detect relative time
-    if "besok" in text or "tomorrow" in text or "besoknya" in text:
-        result["relative"] = "besok"
-        target = datetime.now() + timedelta(days=1)
-        result["date"] = target.strftime("%Y-%m-%d")
-        result["hari"] = HARI.get(target.strftime("%A").lower())
-    elif "lusa" in text:
+    # Detect relative time (lusa first, before besok)
+    if "lusa" in text:
         result["relative"] = "lusa"
         target = datetime.now() + timedelta(days=2)
+        result["date"] = target.strftime("%Y-%m-%d")
+        result["hari"] = HARI.get(target.strftime("%A").lower())
+    elif "besok" in text or "tomorrow" in text or "besoknya" in text:
+        result["relative"] = "besok"
+        target = datetime.now() + timedelta(days=1)
         result["date"] = target.strftime("%Y-%m-%d")
         result["hari"] = HARI.get(target.strftime("%A").lower())
     elif "hari ini" in text or "sekarang" in text or "today" in text:
@@ -107,8 +107,7 @@ def answer_jadwal(intent_data: dict, schedules: dict, hari_key: str = "saya") ->
     if intent_data.get("keyword"):
         keyword = intent_data["keyword"].lower()
         filtered = [s for s in slots if keyword in s[1].lower()]
-        if filtered:
-            slots = filtered
+        slots = filtered  # set langsung, kosong = tidak cocok
 
     relative = intent_data.get("relative", "")
     header = f"📅 Jadwal {hari.title()}"
