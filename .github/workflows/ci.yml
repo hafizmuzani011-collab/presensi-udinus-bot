@@ -36,6 +36,23 @@ jobs:
           done
           exit $failed
 
+      - name: Install test deps
+        run: pip install pytest httpx flask edge-tts
+
+      - name: Run tests
+        run: python -m pytest test/ --tb=short -q
+        env:
+          TELEGRAM_BOT_TOKEN: test
+          KULINO_SAYA_NIM: test
+          KULINO_SAYA_PASS: test
+          KULINO_PACAR_NIM: test
+          KULINO_PACAR_PASS: test
+          MHS_SAYA_NIM: test
+          MHS_SAYA_PASS: test
+          MHS_PACAR_NIM: test
+          MHS_PACAR_PASS: test
+          DASH_TOKEN: test
+
       - name: Generate summary
         if: always()
         run: |

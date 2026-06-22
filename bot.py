@@ -66,9 +66,16 @@ def get_today_holiday() -> str | None:
 
 # Dashboard control (shared with web dashboard) - circular safe
 try:
-    from web_dashboard import CONTROL as DASH_CONTROL
+    from web_dashboard import CONTROL as DASH_CONTROL, get_control, set_control, consume_control
 except Exception:
     DASH_CONTROL = {"autopilot": True, "trigger_tugas": 0, "trigger_presensi": 0}
+    # Fallback: no-op functions
+    def get_control(key, default=None): return DASH_CONTROL.get(key, default)
+    def set_control(key, value): DASH_CONTROL[key] = value
+    def consume_control(key, default=None):
+        val = DASH_CONTROL.get(key, default)
+        DASH_CONTROL[key] = default if default is not None else ""
+        return val
 
 # Setup logging
 logging.basicConfig(
@@ -85,12 +92,12 @@ _polling_backoff = 1.0  # exponential backoff
 
 def get_autopilot() -> bool:
     """Single source of truth untuk status autopilot presensi."""
-    return bool(DASH_CONTROL.get("autopilot", True))
+    return bool(get_control("autopilot", True))
 
 
 def set_autopilot(enabled: bool) -> None:
     """Set autopilot dari Telegram command atau dashboard."""
-    DASH_CONTROL["autopilot"] = bool(enabled)
+    set_control("autopilot", bool(enabled))
     logger.info(f"Autopilot -> {enabled}")
 
 
@@ -187,7 +194,7 @@ def _save_presensi_done(today_str: str) -> None:
 
 
 
-async def proactive_check():
+async def proactive_check() -> None:
     global _tugas_checked_today, _presensi_done
     _proactive_backoff = 1.0
     while True:
@@ -206,9 +213,8 @@ async def proactive_check():
             autopilot_on = get_autopilot()
 
             # === Trigger dari dashboard (counter, tidak ke-miss) ===
-            trigger_tugas_count = int(DASH_CONTROL.get("trigger_tugas", 0) or 0)
+            trigger_tugas_count = int(consume_control("trigger_tugas", 0) or 0)
             if trigger_tugas_count > 0:
-                DASH_CONTROL["trigger_tugas"] = 0
                 await send_message(f"🔔 Trigger dari dashboard: cek tugas ({trigger_tugas_count}x)...")
                 for key in KULINO_ACCOUNTS:
                     nama = KULINO_ACCOUNTS[key]["name"]
@@ -227,9 +233,8 @@ async def proactive_check():
                         await send_message(f"📭 Tidak ada tugas aktif untuk {nama}.")
 
             # === Trigger presensi dari dashboard ===
-            trigger_presensi_who = DASH_CONTROL.get("trigger_presensi", "")
+            trigger_presensi_who = consume_control("trigger_presensi", "")
             if trigger_presensi_who in ("saya", "pacar"):
-                DASH_CONTROL["trigger_presensi"] = ""
                 nama = MHS_ACCOUNTS[trigger_presensi_who]["name"]
                 await send_message(f"🔔 Trigger dari dashboard: presensi {nama}...")
                 ok, msg = await do_presensi_siadin(trigger_presensi_who)
@@ -363,7 +368,7 @@ async def proactive_check():
 
 
 # ============ Command Handlers ============
-async def handle_command(text: str, chat_id: int | None = None):
+async def handle_command(text: str, chat_id: int | None = None) -> None:
     text = text.strip()
     t = text.lower()
 
@@ -667,7 +672,7 @@ async def handle_command(text: str, chat_id: int | None = None):
 
 
 # ============ Main ============
-async def main():
+async def main() -> None:
     global ALLOWED_CHAT_ID, ALLOWED_CHAT_IDS, _polling_backoff
 
     if not BOT_TOKEN:

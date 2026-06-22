@@ -39,6 +39,27 @@ app = Flask(__name__)
 # NOTE: CONTROL di-akses langsung oleh bot.py via `from web_dashboard import CONTROL`.
 # Dilarang self-import (modul sedang loading), jadi CONTROL didefinisikan langsung.
 CONTROL = {"autopilot": True, "trigger_tugas": 0, "last_msg": ""}
+CONTROL_LOCK = threading.Lock()
+
+
+def get_control(key: str, default=None):
+    with CONTROL_LOCK:
+        return CONTROL.get(key, default)
+
+
+def set_control(key: str, value) -> None:
+    with CONTROL_LOCK:
+        CONTROL[key] = value
+
+
+def consume_control(key: str, default=None):
+    """Atomically read & reset control key. Pakai untuk trigger_*. Returns prior value."""
+    with CONTROL_LOCK:
+        val = CONTROL.get(key, default)
+        if key in CONTROL:
+            CONTROL[key] = default if default is not None else ""
+        return val
+
 
 PRESENSI_HISTORY_FILE = ROOT / "presensi_history.json"
 
@@ -661,7 +682,7 @@ def status():
         "uptime": get_uptime(),
         "waktu": now.strftime("%A, %d %B %Y %H:%M WIB"),
         "besok": esok.strftime("%A, %d %B %Y"),
-        "autopilot": "Aktif" if CONTROL["autopilot"] else "Nonaktif",
+        "autopilot": "Aktif" if get_control("autopilot") else "Nonaktif",
         "stat": get_stats_snapshot(),
         "jadwal_hari_ini": {
             KULINO_ACCOUNTS["saya"]["name"]: [{"jam": j, "matkul": m, "ruang": r} for j, m, r in today_saya],
@@ -676,7 +697,7 @@ def status():
         "log_errors": log_errors,
         "has_screenshot_tugas": os.path.exists(SCREENSHOT_TUGAS),
         "has_screenshot_presensi": os.path.exists(SCREENSHOT_PRESENSI),
-        "control": CONTROL,
+        "control": dict(CONTROL),
     })
 
 
@@ -779,21 +800,25 @@ def screenshot_presensi():
 @app.route("/control")
 @_require_token
 def control():
-    return jsonify(CONTROL)
+    with CONTROL_LOCK:
+        return jsonify(dict(CONTROL))
 
 
 @app.route("/control/toggle-autopilot", methods=["POST"])
 @_require_token
 def toggle_autopilot():
-    CONTROL["autopilot"] = not CONTROL["autopilot"]
-    logger.info(f"Autopilot toggled via dashboard: {CONTROL['autopilot']}")
-    return jsonify({"autopilot": CONTROL["autopilot"]})
+    with CONTROL_LOCK:
+        CONTROL["autopilot"] = not CONTROL["autopilot"]
+        new_val = CONTROL["autopilot"]
+    logger.info(f"Autopilot toggled via dashboard: {new_val}")
+    return jsonify({"autopilot": new_val})
 
 
 @app.route("/control/trigger-tugas", methods=["POST"])
 @_require_token
 def trigger_tugas():
-    CONTROL["trigger_tugas"] = True
+    with CONTROL_LOCK:
+        CONTROL["trigger_tugas"] = (CONTROL.get("trigger_tugas", 0) or 0) + 1
     logger.info("Trigger cek tugas via dashboard")
     return jsonify({"triggered": True})
 
@@ -806,7 +831,7 @@ def trigger_presensi():
     who = data.get("who") or request.args.get("who", "saya")
     if who not in ("saya", "pacar"):
         return jsonify({"error": "Invalid who (saya/pacar)"}), 400
-    CONTROL["trigger_presensi"] = who
+    set_control("trigger_presensi", who)
     logger.info(f"Trigger presensi via dashboard: {who}")
     return jsonify({"triggered": True, "who": who})
 

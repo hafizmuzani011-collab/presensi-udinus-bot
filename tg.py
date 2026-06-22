@@ -101,7 +101,7 @@ async def send_photo(photo_path: str, chat_ids: list[int] | None = None) -> bool
     return success
 
 
-async def get_updates(offset: int | None = None) -> list:
+async def get_updates(offset: int | None = None) -> list[dict]:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"timeout": 30}
     if offset:
