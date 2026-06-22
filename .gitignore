@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Bot runtime
+bot.lock
+telegram_offset.json
+*.log
+
+# Secrets & runtime
+.env
+chat_id.txt
+presensi_history.json
+
+# Screenshots & dynamic files
+bukti_*.png
+presensiOnline.png
+presensi.png
+screenshots/*.png
+
+# Test artifacts
+test/__pycache__/
+test/screenshots/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
