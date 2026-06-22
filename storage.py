@@ -8,7 +8,7 @@ from typing import Any
 
 from config import (
     CHAT_ID_FILE, LOCK_FILE, OFFSET_FILE,
-    SCHEDULES_FILE, TASKS_DEADLINE_FILE,
+    SCHEDULES_FILE, TASKS_DEADLINE_FILE, LOG_DIR,
 )
 
 
@@ -143,3 +143,19 @@ def cleanup_expired_deadlines() -> int:
                 pass
     save_tasks_deadlines(cache)
     return removed
+
+
+def write_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang: str, status: str) -> None:
+    """Catat presensi ke logbook/{date}.md (append mode)."""
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
+    path = os.path.join(LOG_DIR, f"{date_str}.md")
+    icon = "✅" if status == "hadir" else "❌"
+    line = f"- {jam} - {matkul} {icon} ({account_key}, Ruang {ruang})\n"
+    with open(path, "a", encoding="utf-8") as f:
+        # Header kalau file baru
+        if os.path.getsize(path) == 0:
+            from datetime import datetime
+            dt = datetime.fromisoformat(date_str)
+            f.write(f"## {dt.strftime('%A, %d %B %Y')}\n\n")
+        f.write(line)

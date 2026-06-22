@@ -145,6 +145,10 @@ def dashboard_page(token, page="dashboard"):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Presensi Udinus</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0b1c30">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -557,6 +561,7 @@ var t=days[d.getDay()]+', '+pad(d.getDate())+' '+months[d.getMonth()]+' '+d.getF
 var el=document.getElementById('realtimeClock');
 if(el)el.textContent=t;
 }}
+if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
 tickClock();
 setInterval(tickClock,1000);
 setInterval(ld,30000);
@@ -686,6 +691,39 @@ def cleanup():
     from storage import cleanup_expired_deadlines
     removed = cleanup_expired_deadlines()
     return jsonify({"removed": removed})
+
+
+# === PWA support ===
+@app.route("/manifest.json")
+def pwa_manifest():
+    return jsonify({
+        "name": "Presensi Udinus",
+        "short_name": "Presensi",
+        "description": "Dashboard monitoring presensi & tugas Udinus",
+        "start_url": "/?token=presensi123",
+        "display": "standalone",
+        "background_color": "#f8f9ff",
+        "theme_color": "#0b1c30",
+        "icons": [
+            {
+                "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSI4MCIgZm9udC1zaXplPSI4MCI+8J+QiTwvdGV4dD48L3N2Zz4=",
+                "sizes": "192x192",
+                "type": "image/svg+xml"
+            }
+        ]
+    })
+
+
+@app.route("/sw.js")
+def pwa_sw():
+    return app.response_class("""
+const CACHE='presensi-v1';
+self.addEventListener('install',e=>self.skipWaiting());
+self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch',e=>{
+    e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));
+});
+""", mimetype="application/javascript")
 
 
 # === History presensi ===

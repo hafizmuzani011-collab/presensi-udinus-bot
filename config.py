@@ -69,6 +69,7 @@ AUTOPILOT_ENABLED = True
 ALLOWED_CHAT_ID = None
 ALLOWED_CHAT_IDS: list[int] = []
 BOT_START_TIME = datetime.now()
+LOG_DIR = "logbook"
 STATS_FILE = "stats.json"
 STATS = {
     "messages_received": 0,

@@ -186,6 +186,15 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                 cache["notified"] = notified
                 save_tasks_deadlines(cache)
                 reminded = True
+                # Voice reminder
+                try:
+                    from tts import text_to_voice, EDGE_TTS_AVAILABLE
+                    if EDGE_TTS_AVAILABLE:
+                        import asyncio
+                        voice_text = f"Hai kak {data['account']}, tugas {data['name']} deadline tinggal {int(hours)} jam lagi, jangan lupa dikerjakan ya!"
+                        p = await text_to_voice(voice_text)
+                except Exception:
+                    pass
 
         elif hours <= 12 and not notified.get(f"{task_key}:h12"):
             msg = (f"⚠️ *Pengingat Deadline* H-12\n\n"

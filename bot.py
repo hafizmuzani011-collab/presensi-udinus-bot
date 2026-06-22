@@ -195,6 +195,12 @@ async def proactive_check():
                                 await send_message(f"✅ Presensi {MHS_ACCOUNTS[who]['name']} berhasil!"
                                                    f"\n📖 {mk}\n🕐 {jam}\n🏫 {ruang}")
                                 await send_photo(SCREENSHOT_PRESENSI)
+                                # Catat ke logbook harian
+                                try:
+                                    from storage import write_logbook
+                                    write_logbook(now.strftime("%Y-%m-%d"), who, jam, mk, ruang, "hadir")
+                                except Exception as e:
+                                    logger.error(f"Logbook error: {e}")
                             else:
                                 await send_message(f"⚠️ Presensi {MHS_ACCOUNTS[who]['name']} gagal: {msg}")
                             await asyncio.sleep(60)
@@ -211,6 +217,16 @@ async def handle_command(text: str, chat_id: int | None = None):
     global AUTOPILOT_ENABLED, _presensi_done
     text = text.strip()
     t = text.lower()
+
+    # Resolve custom alias dulu
+    try:
+        from aliases import resolve_alias
+        alias_cmd = resolve_alias(text)
+        if alias_cmd:
+            text = alias_cmd
+            t = text.lower()
+    except Exception as e:
+        logger.error(f"Alias error: {e}")
 
     if t in ("/start", "start", "halo", "hai", "hi"):
         await send_message("Halo! 👋 Saya Asisten Presensi Udinus. Ketik `help` untuk bantuan.")
@@ -307,6 +323,45 @@ async def handle_command(text: str, chat_id: int | None = None):
         else:
             await send_message("🧹 Tidak ada yang expired.")
 
+    elif t in ("logbook", "catatan"):
+        from config import LOG_DIR
+        import os
+        if not os.path.exists(LOG_DIR):
+            await send_message("📓 Logbook kosong.")
+        else:
+            files = sorted([f for f in os.listdir(LOG_DIR) if f.endswith(".md")], reverse=True)[:3]
+            if not files:
+                await send_message("📓 Logbook kosong.")
+            else:
+                text = "📓 *Logbook* (3 terakhir):\n\n"
+                for f in files:
+                    p = os.path.join(LOG_DIR, f)
+                    with open(p) as fp:
+                        text += f"📅 {f[:-3]}\n```\n{fp.read()[:500]}\n```\n"
+                await send_message(text)
+
+    elif t.startswith("addalias") or t.startswith("/addalias"):
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
+            await send_message("Gunakan: `addalias <nama> <perintah>`")
+        else:
+            from aliases import add_alias
+            name = parts[1]
+            cmd = parts[2]
+            add_alias(name, cmd)
+            await send_message(f"✅ Alias `/{name}` → `{cmd}`")
+
+    elif t.startswith("delalias") or t.startswith("/delalias"):
+        parts = text.split()
+        if len(parts) < 2:
+            await send_message("Gunakan: `delalias <nama>`")
+        else:
+            from aliases import remove_alias
+            if remove_alias(parts[1].lower()):
+                await send_message(f"✅ Alias `/{parts[1]}` dihapus.")
+            else:
+                await send_message(f"❌ Alias `{parts[1]}` tidak ditemukan.")
+
     elif t.startswith("/addchid") or t.startswith("addchid"):
         parts = text.split()
         if len(parts) < 2:
@@ -360,7 +415,34 @@ async def handle_command(text: str, chat_id: int | None = None):
             await send_message(f"❌ {msg}")
 
     else:
-        await send_message("Halo! Ketik `help` untuk lihat perintah.")
+        # Natural language fallback: parse pertanyaan
+        try:
+            from nlp import parse_question, answer_jadwal, answer_presensi
+            intent = parse_question(text)
+            if intent["intent"] in ("jadwal", "presensi") and intent["hari"]:
+                schedules = load_schedules()
+                if intent["intent"] == "jadwal":
+                    reply = answer_jadwal(intent, schedules, "saya")
+                else:
+                    reply = answer_presensi(intent, schedules)
+                await send_message(reply)
+            elif intent["intent"] == "deadline":
+                cache = load_tasks_deadlines()
+                items = [v for k, v in cache.items() if k != "notified"]
+                if intent["keyword"]:
+                    items = [i for i in items if intent["keyword"].lower() in i.get("name", "").lower()]
+                if items:
+                    lines = ["📋 Deadline" + (f" (cari: {intent['keyword']})" if intent.get('keyword') else "") + ":"]
+                    for i in items[:10]:
+                        lines.append(f"  • {i.get('name','')} - {i.get('deadline_raw','')}")
+                    await send_message("\n".join(lines))
+                else:
+                    await send_message("📭 Deadline tidak ditemukan.")
+            else:
+                await send_message("Halo! Ketik `help` untuk lihat perintah.")
+        except Exception as e:
+            logger.error(f"NLP error: {e}")
+            await send_message("Halo! Ketik `help` untuk lihat perintah.")
 
 
 # ============ Main ============
