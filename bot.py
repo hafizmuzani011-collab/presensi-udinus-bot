@@ -34,6 +34,35 @@ if os.path.exists(STATS_FILE):
         pass
 from config import STATS  # ensure latest after load
 
+# Load holidays
+HOLIDAYS_FILE = "holidays.json"
+HOLIDAY_CACHE: dict[str, str] = {}  # date -> name
+
+
+def load_holidays() -> dict[str, str]:
+    """Load holidays dari file. Return {date_str: summary}."""
+    if not os.path.exists(HOLIDAYS_FILE):
+        return {}
+    try:
+        with open(HOLIDAYS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v.get("summary", "?") for k, v in data.get("holidays", {}).items()}
+    except Exception:
+        return {}
+
+
+def is_holiday(date_str: str) -> str | None:
+    """Return nama hari libur kalau date_str adalah libur nasional."""
+    global HOLIDAY_CACHE
+    if not HOLIDAY_CACHE:
+        HOLIDAY_CACHE = load_holidays()
+    return HOLIDAY_CACHE.get(date_str)
+
+
+def get_today_holiday() -> str | None:
+    """Return nama hari libur hari ini (None kalau bukan libur)."""
+    return is_holiday(datetime.now().strftime("%Y-%m-%d"))
+
 # Dashboard control (shared with web dashboard) - circular safe
 try:
     from web_dashboard import CONTROL as DASH_CONTROL
@@ -283,7 +312,8 @@ async def proactive_check():
                             )
 
             # === Autopilot Presensi (HANYA kalau autopilot on) ===
-            if autopilot_on and hari_id:
+            today_holiday = get_today_holiday()
+            if autopilot_on and hari_id and not today_holiday:
                 schedules = load_schedules()
                 for who in ("saya", "pacar"):
                     if who not in MHS_ACCOUNTS:
@@ -359,6 +389,8 @@ async def handle_command(text: str, chat_id: int | None = None):
             "📋 `deadline` - Deadline tersimpan\n"
             "✅ `statustugas <nama>` - Tandai selesai\n"
             "🧹 `cleanup` - Hapus deadline lewat\n"
+            "📋 `ujian` - Jadwal ujian\n"
+            "📢 `libur` - Hari libur nasional\n"
             "🤖 `autopilot` - Presensi otomatis\n"
             "📷 `presensi` - Presensi manual\n"
             "📊 `/status` - Status bot\n"
@@ -521,6 +553,10 @@ async def handle_command(text: str, chat_id: int | None = None):
             await send_message("🤖 Autopilot: AKTIF")
 
     elif "presensi" in t or "hadir" in t:
+        today_h = get_today_holiday()
+        if today_h:
+            await send_message(f"📢 Hari ini libur: *{today_h}*.\nTidak perlu presensi.")
+            return
         target = "pacar" if "azfa" in t or "pacar" in t else "saya"
         ok, msg = await do_presensi_siadin(target)
         if ok:
@@ -560,6 +596,30 @@ async def handle_command(text: str, chat_id: int | None = None):
         except Exception as e:
             logger.error(f"ujian error: {e}")
             await send_message(f"❌ Gagal cek jadwal ujian: {e}")
+
+    elif t in ("libur", "libur 2026", "hari libur", "tanggal merah"):
+        # Tampilkan hari libur
+        if not HOLIDAY_CACHE:
+            HOLIDAY_CACHE.update(load_holidays())
+        today_h = get_today_holiday()
+        msg_parts = []
+        if today_h:
+            msg_parts.append(f"📢 *Hari ini LIBUR*\n{today_h}\n")
+
+        # Filter libur yang relevan ke depan
+        now = datetime.now()
+        upcoming = []
+        for date_str in sorted(HOLIDAY_CACHE.keys()):
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            if dt < now:
+                continue
+            name = HOLIDAY_CACHE[date_str]
+            day_id = {"monday":"Senin","tuesday":"Selasa","wednesday":"Rabu","thursday":"Kamis","friday":"Jumat","saturday":"Sabtu","sunday":"Minggu"}.get(dt.strftime("%A").lower(), "?")
+            upcoming.append(f"  {day_id}, {date_str}: {name}")
+
+        msg_parts.append(f"📅 *Libur 2026 (sisa)*")
+        msg_parts.extend(upcoming[:15])
+        await send_message("\n".join(msg_parts))
 
     else:
         # Natural language fallback: parse pertanyaan
