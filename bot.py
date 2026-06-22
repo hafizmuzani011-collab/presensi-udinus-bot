@@ -6,6 +6,7 @@ import json
 import logging
 import logging.handlers
 import os
+import signal
 import sys
 from datetime import datetime, timedelta
 
@@ -687,6 +688,21 @@ async def main() -> None:
         logger.error("Instance lain sedang berjalan")
         sys.exit(1)
 
+    # Graceful shutdown: SIGTERM / SIGINT → cancel polling
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except NotImplementedError:
+            # Windows: add_signal_handler not available, fallback to KeyboardInterrupt
+            pass
+
     # Load chat IDs
     ALLOWED_CHAT_IDS = load_chat_ids()
     ALLOWED_CHAT_ID = ALLOWED_CHAT_IDS[0] if ALLOWED_CHAT_IDS else None
@@ -711,6 +727,9 @@ async def main() -> None:
     offset = load_offset()
     try:
         while True:
+            if shutdown_event.is_set():
+                logger.info("Shutting down polling loop")
+                break
             try:
                 updates = await get_updates(offset)
                 _polling_backoff = 1.0  # reset on success
@@ -777,3 +796,7 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         instance_lock.release_lock()
+        from browser import close_browser
+        asyncio.run(close_browser())
+        from tg import close_client
+        asyncio.run(close_client())

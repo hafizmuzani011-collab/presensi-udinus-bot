@@ -22,6 +22,7 @@ from config import (
     SCREENSHOT_TUGAS, SCREENSHOT_PRESENSI,
     KULINO_ACCOUNTS, BOT_START_TIME, LOG_DIR,
     get_stats_snapshot,
+    CONTROL, CONTROL_LOCK, get_control, PRESENSI_HISTORY_FILE,
 )
 
 # === Logger ===
@@ -36,43 +37,19 @@ logger.info("Dashboard token loaded from DASH_TOKEN env")
 app = Flask(__name__)
 
 # === Control & History (in-memory, share dengan bot.py) ===
-# NOTE: CONTROL di-akses langsung oleh bot.py via `from web_dashboard import CONTROL`.
-# Dilarang self-import (modul sedang loading), jadi CONTROL didefinisikan langsung.
-CONTROL = {"autopilot": True, "trigger_tugas": 0, "last_msg": ""}
-CONTROL_LOCK = threading.Lock()
-
-
-def get_control(key: str, default=None):
-    with CONTROL_LOCK:
-        return CONTROL.get(key, default)
-
-
-def set_control(key: str, value) -> None:
-    with CONTROL_LOCK:
-        CONTROL[key] = value
-
-
-def consume_control(key: str, default=None):
-    """Atomically read & reset control key. Pakai untuk trigger_*. Returns prior value."""
-    with CONTROL_LOCK:
-        val = CONTROL.get(key, default)
-        if key in CONTROL:
-            CONTROL[key] = default if default is not None else ""
-        return val
-
-
-PRESENSI_HISTORY_FILE = ROOT / "presensi_history.json"
-
+# CONTROL, CONTROL_LOCK, get_control, set_control, consume_control
+# di-import dari config.py agar tidak circular.
+HISTORY_PATH = Path(str(PRESENSI_HISTORY_FILE))  # convert str -> Path
 def load_history():
-    if not PRESENSI_HISTORY_FILE.exists():
+    if not HISTORY_PATH.exists():
         return []
     try:
-        return json.loads(PRESENSI_HISTORY_FILE.read_text())
+        return json.loads(HISTORY_PATH.read_text())
     except (json.JSONDecodeError, OSError):
         return []
 
 def save_history(items):
-    PRESENSI_HISTORY_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False))
+    HISTORY_PATH.write_text(json.dumps(items, indent=2, ensure_ascii=False))
 
 
 # ============ Helpers ============
@@ -677,7 +654,7 @@ def status():
     log_errors = [l for l in read_file_lines(LOG_FILE, 200)
                   if re.search(r"\b(ERROR|CRITICAL)\b", l)][-5:]
 
-    from config import get_stats_snapshot
+    from config import get_stats_snapshot  # already imported top-level
     return jsonify({
         "uptime": get_uptime(),
         "waktu": now.strftime("%A, %d %B %Y %H:%M WIB"),

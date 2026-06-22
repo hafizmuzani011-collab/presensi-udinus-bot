@@ -106,3 +106,30 @@ def save_stats() -> bool:
     except OSError as e:
         logging.getLogger(__name__).error(f"Save stats gagal: {e}")
         return False
+
+
+# ==== Control state (shared between bot.py and web_dashboard.py) ====
+# Dipindah ke sini agar tidak circular import.
+CONTROL = {"autopilot": True, "trigger_tugas": 0, "last_msg": ""}
+CONTROL_LOCK = threading.Lock()
+
+
+def get_control(key: str, default=None):
+    """Thread-safe read CONTROL[key]."""
+    with CONTROL_LOCK:
+        return CONTROL.get(key, default)
+
+
+def set_control(key: str, value) -> None:
+    """Thread-safe write CONTROL[key]."""
+    with CONTROL_LOCK:
+        CONTROL[key] = value
+
+
+def consume_control(key: str, default=None):
+    """Thread-safe read & reset CONTROL[key] (atomic). Returns prior value."""
+    with CONTROL_LOCK:
+        val = CONTROL.get(key, default)
+        if key in CONTROL:
+            CONTROL[key] = default if default is not None else ""
+        return val

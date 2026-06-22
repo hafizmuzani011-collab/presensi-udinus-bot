@@ -8,6 +8,7 @@ __pycache__/
 bot.lock
 telegram_offset.json
 *.log
+*.bak
 
 # Secrets & runtime
 .env

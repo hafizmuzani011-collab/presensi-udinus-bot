@@ -2,6 +2,7 @@
 import re
 from datetime import datetime, timedelta
 
+from config import KULINO_ACCOUNTS
 from storage import load_schedules, load_tasks_deadlines, save_tasks_deadlines
 
 HARI_ID = {
@@ -131,8 +132,6 @@ def _extract_time(text: str, default_h: int, default_m: int) -> tuple[int, int]:
 
 async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send_message) -> None:
     """Parse deadline dari tugas, simpan ke cache, kirim reminder H-12/H-6."""
-    from config import KULINO_ACCOUNTS
-
     account_name = KULINO_ACCOUNTS[account_key]["name"]
     cache = load_tasks_deadlines()
     now = datetime.now()
