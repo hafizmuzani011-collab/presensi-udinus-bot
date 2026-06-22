@@ -465,13 +465,13 @@ var total=0;
 var h='';
 for(var n in j){{
 total++;
-h+='<div class="bg-white border border-gray-200 rounded-xl overflow-hidden"><div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2"><div class="w-8 h-8 rounded-lg bg-gray-900 text-white flex items-center justify-center font-bold text-sm">'+(n[0]||'')+'</div><div><h3 class="text-sm font-bold">'+n+'</h3></div></div><div class="divide-y divide-gray-100">';
+h+='<div class="bg-white border border-gray-200 rounded-xl overflow-hidden"><div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2"><div class="w-8 h-8 rounded-lg bg-gray-900 text-white flex items-center justify-center font-bold text-sm">'+esc(n[0]||'')+'</div><div><h3 class="text-sm font-bold">'+esc(n)+'</h3></div></div><div class="divide-y divide-gray-100">';
 for(var i=0;i<hariOrder.length;i++){{
 var hari=hariOrder[i];
 var slots=j[n][hari]||[];
 h+='<div class="px-5 py-3"><div class="text-xs font-semibold text-gray-500 uppercase mb-2">'+hari.charAt(0).toUpperCase()+hari.slice(1)+'</div>';
 if(!slots.length)h+='<p class="text-xs text-gray-400 italic py-1">Libur</p>';
-else h+=slots.map(function(s){{return'<div class="flex items-center gap-3 py-1.5 text-sm"><div class="w-20 text-gray-500 font-mono text-xs shrink-0">'+s[0]+'</div><div class="flex-1 font-medium">'+s[1]+'</div><div class="text-gray-500 text-xs shrink-0">'+s[2]+'</div></div>';}}).join('');
+else h+=slots.map(function(s){{return'<div class="flex items-center gap-3 py-1.5 text-sm"><div class="w-20 text-gray-500 font-mono text-xs shrink-0">'+esc(s[0])+'</div><div class="flex-1 font-medium">'+esc(s[1])+'</div><div class="text-gray-500 text-xs shrink-0">'+esc(s[2])+'</div></div>';}}).join('');
 h+='</div>';
 }}
 h+='</div></div>';
@@ -592,7 +592,7 @@ for(var n in j){{if(j[n][hariId])slots=slots.concat(j[n][hariId].map(function(s)
 var isToday=ds===now.toISOString().split('T')[0];
 h+='<div class="border '+(isToday?'border-green-500 bg-green-50':'border-gray-200')+' rounded-lg p-2 min-h-32"><div class="text-xs font-semibold text-gray-500 mb-2">'+hariOrder[i]+'<br><span class="text-sm text-gray-900 font-bold">'+day.getDate()+'</span></div>';
 slots.forEach(function(s){{
-h+='<div class="text-[10px] bg-blue-100 text-blue-800 rounded px-1 py-0.5 mb-1 truncate" title="'+s.nama+': '+s.slot[1]+' ('+s.slot[2]+')">'+s.slot[0].slice(0,5)+' '+s.slot[1].slice(0,12)+'</div>';
+h+='<div class="text-[10px] bg-blue-100 text-blue-800 rounded px-1 py-0.5 mb-1 truncate" title="'+esc(s.nama)+': '+esc(s.slot[1])+' ('+esc(s.slot[2])+')">'+esc(s.slot[0].slice(0,5))+' '+esc(s.slot[1].slice(0,12))+'</div>';
 }});
 h+='</div>';
 }}
