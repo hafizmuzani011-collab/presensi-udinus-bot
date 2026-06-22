@@ -195,7 +195,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
                 except Exception:
                     pass
 
-        elif hours <= 12 and not notified.get(f"{task_key}:h12"):
+        elif 6 < hours <= 12 and not notified.get(f"{task_key}:h12"):
             msg = (f"⚠️ *Pengingat Deadline* H-12\n\n"
                    f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
                    f"📅 {data['deadline_raw']}")
