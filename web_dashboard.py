@@ -21,7 +21,7 @@ ROOT = Path(__file__).parent
 from config import (
     LOG_FILE, TASKS_DEADLINE_FILE, SCHEDULES_FILE,
     SCREENSHOT_TUGAS, SCREENSHOT_PRESENSI,
-    KULINO_ACCOUNTS, MHS_ACCOUNTS, BOT_START_TIME,
+    KULINO_ACCOUNTS, MHS_ACCOUNTS, BOT_START_TIME, LOG_DIR,
 )
 
 # === Logger ===
@@ -126,7 +126,7 @@ def index():
 
 @app.route("/<page>")
 def pages(page):
-    if page in ("dashboard","jadwal","deadline","history","calendar","log","settings"):
+    if page in ("dashboard","jadwal","deadline","history","calendar","log","settings","logbook"):
         from flask import redirect
         return redirect(f"/?token={request.args.get('token') or request.headers.get('X-Dash-Token') or DASH_TOKEN}#{page}")
     return index()
@@ -136,6 +136,8 @@ def dashboard_page(token, page="dashboard"):
         ("dashboard", "Dashboard", "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"),
         ("jadwal", "Jadwal", "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"),
         ("deadline", "Deadline", "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"),
+        ("history", "Riwayat", "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"),
+        ("logbook", "Logbook", "M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"),
         ("history", "History", "M12 8v4l3 3 6-3a9 9 0 11-18 0 9 9 0 0118 0z"),
         ("calendar", "Calendar", "M8 7V3m0 2.586l5.293-5.293a1 1 0 011.414 0L20 5.414V17a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2h2z"),
         ("log", "Log", "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"),
@@ -320,6 +322,26 @@ Dark Mode
 </div>
 </div>
 
+<!-- LOGBOOK -->
+<div id="page-logbook" class="page-section hidden">
+<div class="mb-8 flex items-center justify-between">
+<h2 class="text-2xl font-bold">Logbook Presensi</h2>
+<div class="flex items-center gap-2">
+<select id="logbookFilter" onchange="renderLogbook()" class="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">
+<option value="all">Semua</option>
+<option value="saya">Hafizh (Saya)</option>
+<option value="pacar">Azfa (Pacar)</option>
+</select>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-xs text-gray-500 uppercase">Total Presensi</div><div class="text-2xl font-bold text-gray-900" id="lbTotal">—</div></div>
+<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-xs text-gray-500 uppercase">Hadir</div><div class="text-2xl font-bold text-green-600" id="lbHadir">—</div></div>
+<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-xs text-gray-500 uppercase">Persentase</div><div class="text-2xl font-bold text-indigo-600" id="lbPct">—</div></div>
+</div>
+<div id="logbookList" class="space-y-4"></div>
+</div>
+
 <!-- SETTINGS -->
 <div id="page-settings" class="page-section hidden">
 <div class="mb-8"><h2 class="text-2xl font-bold">Settings</h2></div>
@@ -384,6 +406,7 @@ if(page==='calendar')renderCalendar();
 if(page==='jadwal')renderJadwalFull();
 if(page==='deadline')doSearch();
 if(page==='log')renderLogFull();
+if(page==='logbook')renderLogbook();
 }}
 function showPageFromHash(){{const h=location.hash.replace('#','')||'dashboard';navigate(h);}}
 function clearHistory(){{if(!confirm('Hapus semua history presensi?'))return;ap('/history/clear','POST').then(r=>{{notify('History dihapus','success');renderHistory();}});}}
@@ -522,6 +545,27 @@ if(c>0)bars.push('<text x="'+(x+bw2/2)+'" y="'+(y-5)+'" text-anchor="middle" fon
 }}
 svg.innerHTML=bars.join('');
 }});
+}}
+
+async function renderLogbook(){{
+var acct=document.getElementById('logbookFilter').value;
+var r=await ap('/logbook?account='+acct);
+if(!r){{document.getElementById('logbookList').innerHTML='<p class="text-sm text-gray-400 italic">Gagal memuat logbook</p>';return;}}
+document.getElementById('lbTotal').textContent=r.stats.total;
+document.getElementById('lbHadir').textContent=r.stats.hadir;
+document.getElementById('lbPct').textContent=r.stats.pct+'%';
+if(!r.days.length){{document.getElementById('logbookList').innerHTML='<p class="text-sm text-gray-400 italic">Logbook kosong</p>';return;}}
+var h='';
+r.days.forEach(function(d){{
+h+='<div class="bg-white border border-gray-200 rounded-xl p-4"><div class="text-sm font-semibold text-gray-700 mb-3">📅 '+d.date+'</div>';
+d.entries.forEach(function(e){{
+var icon=e.status==='hadir'?'✅':'❌';
+var color=e.status==='hadir'?'text-green-700':'text-red-700';
+h+='<div class="flex items-center justify-between py-2 border-b border-gray-100 last:border-0"><div class="flex items-center gap-3"><span class="text-lg">'+icon+'</span><div><div class="text-sm font-medium text-gray-900">'+e.matkul+'</div><div class="text-xs text-gray-500">Ruang '+e.ruang+' • '+(e.account==="saya"?"Hafizh":"Azfa")+'</div></div></div><div class="text-sm font-mono '+color+'">'+e.jam+'</div></div>';
+}});
+h+='</div>';
+}});
+document.getElementById('logbookList').innerHTML=h;
 }}
 
 async function renderHistory(){{
@@ -665,6 +709,53 @@ def log():
     errors = [l for l in lines if re.search(r"\b(ERROR|CRITICAL)\b", l)]
     n = min(int(request.args.get("n", 50)), 500)
     return jsonify({"total": len(lines), "errors": len(errors), "lines": lines[-n:]})
+
+
+@app.route("/logbook")
+@_require_token
+def logbook_viewer():
+    """Logbook viewer - list of days, filter by user/course."""
+    account_filter = request.args.get("account", "all")
+    days = []
+    if os.path.exists(LOG_DIR):
+        for fn in sorted(os.listdir(LOG_DIR), reverse=True):
+            if not fn.endswith(".md"):
+                continue
+            date_str = fn[:-3]
+            content = (ROOT / LOG_DIR / fn).read_text(encoding="utf-8")
+            entries = []
+            for line in content.split("\n"):
+                line = line.strip()
+                if not line.startswith("- "):
+                    continue
+                # Parse: "- 14:10-15:50 - BASIS DATA ✅ (saya, Ruang D.2.J)"
+                m = re.match(r"- (\S+) - (.+?) ([✅❌]) \(([^,]+), Ruang ([^)]+)\)", line)
+                if m:
+                    jam, matkul, status, account, ruang = m.groups()
+                    status_ok = status == "✅"
+                    if account_filter != "all" and account != account_filter:
+                        continue
+                    entries.append({
+                        "jam": jam,
+                        "matkul": matkul,
+                        "status": "hadir" if status_ok else "absen",
+                        "account": account,
+                        "ruang": ruang,
+                    })
+            if entries:
+                days.append({"date": date_str, "entries": entries})
+    # Stats
+    total = sum(len(d["entries"]) for d in days)
+    hadir = sum(1 for d in days for e in d["entries"] if e["status"] == "hadir")
+    pct = round((hadir / total) * 100, 1) if total else 0
+    return jsonify({
+        "days": days,
+        "stats": {
+            "total": total,
+            "hadir": hadir,
+            "pct": pct,
+        }
+    })
 
 
 @app.route("/screenshot/tugas")

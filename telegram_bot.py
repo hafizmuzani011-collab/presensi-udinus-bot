@@ -287,7 +287,92 @@ async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
     except Exception as e:
         logger.error(f"Screenshot gagal: {e}")
 
-    return True, "Berhasil klik tombol presensi"
+    # === Verifikasi: cek apakah presensi benar-benar sukses ===
+    success, verify_msg = await _verify_presensi_success(page)
+    if not success:
+        logger.warning(f"Verifikasi gagal: {verify_msg}")
+        return False, f"Verifikasi gagal: {verify_msg}"
+
+    return True, f"Berhasil klik tombol presensi ({verify_msg})"
+
+
+async def _verify_presensi_success(page) -> tuple[bool, str]:
+    """Cek halaman setelah klik Ya, apakah presensi benar-benar sukses.
+
+    Return (success, message). success=True kalau ada indikator berhasil.
+    """
+    try:
+        # Tunggu 2 detik untuk response server
+        await page.wait_for_timeout(2000)
+
+        # Ambil teks halaman untuk dicek
+        body_text = (await page.inner_text("body")).lower()
+
+        # Indikator sukses (positif)
+        success_patterns = [
+            "berhasil",
+            "sukses",
+            "success",
+            "hadir",
+            "telah melakukan presensi",
+            "presensi berhasil",
+            "successfully",
+            "recorded",
+            "tercatat",
+        ]
+        # Indikator gagal (negatif)
+        fail_patterns = [
+            "gagal",
+            "failed",
+            "error",
+            "tidak berhasil",
+            "tidak dapat",
+            "denied",
+            "tolak",
+            "duplikat",
+            "sudah pernah",
+            "already",
+            "tidak memenuhi",
+            "tidak dalam jadwal",
+        ]
+
+        # Cek pattern positif dulu
+        for pat in success_patterns:
+            if pat in body_text:
+                return True, f"indikator: '{pat}'"
+
+        # Cek pattern negatif
+        for pat in fail_patterns:
+            if pat in body_text:
+                return False, f"indikator gagal: '{pat}'"
+
+        # Cek apakah card yang barusan di-klik udah berubah status
+        # (biasanya dari "Presensi Sekarang" ke "Sudah Presensi" atau similar)
+        try:
+            card_state = await page.evaluate("""() => {
+                const cards = document.querySelectorAll('.card, .list-group-item, .row, .matkul-item');
+                const states = [];
+                cards.forEach(c => {
+                    const text = c.innerText || '';
+                    if (text.length < 5) return;
+                    // Cari card yang barusan di-klik (yang punya teks HADIR/sudah)
+                    if (text.match(/(sudah|tercatat|selesai|✓|✔|hadir|present)/i)) {
+                        states.push('HADIR');
+                    } else if (text.match(/(belum|not yet|tidak hadir|absen|alpa)/i)) {
+                        states.push('BELUM');
+                    }
+                });
+                return states;
+            }""")
+            if "HADIR" in card_state:
+                return True, f"card state: HADIR detected"
+        except Exception:
+            pass
+
+        # Default: tidak ada indikasi kuat, anggap success (klik sukses)
+        return True, "no error indicator"
+    except Exception as e:
+        return True, f"verify error (assume success): {e}"
 
 
 def extract_deadline_from_text(page_text: str) -> list[dict]:

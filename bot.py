@@ -135,6 +135,7 @@ async def update_schedules_from_mhs() -> tuple[bool, str]:
 _tugas_checked_today: str | None = None
 _presensi_done: set = set()
 _presensi_done_date: str = ""
+_reminder_sent: set = set()  # sesi_key yang sudah dikirim reminder
 
 
 def _load_presensi_done_for_today(today_str: str) -> set:
@@ -242,6 +243,40 @@ async def proactive_check():
                         json.dump(STATS, sf, indent=2)
                 except Exception as e:
                     logger.error(f"Save stats gagal: {e}")
+
+            # === Reminder 30 menit sebelum kelas (INDEPENDENT dari autopilot) ===
+            if hari_id:
+                schedules = load_schedules()
+                now_min = hour * 60 + minute
+                for who in ("saya", "pacar"):
+                    if who not in MHS_ACCOUNTS:
+                        continue
+                    today_sched = schedules.get(who, {}).get(hari_id, [])
+                    for jam, mk, ruang in today_sched:
+                        parts = jam.split("-")
+                        if len(parts) != 2:
+                            continue
+                        jam_mulai = parts[0].strip().replace(".", ":")
+                        try:
+                            h, m = map(int, jam_mulai.split(":"))
+                        except ValueError:
+                            continue
+                        start_min = h * 60 + m
+                        # Window reminder: 30-29 menit sebelum mulai
+                        if start_min - 30 == now_min:
+                            reminder_key = f"reminder:{who}:{hari_id}:{jam_mulai}"
+                            if reminder_key in _reminder_sent:
+                                continue
+                            _reminder_sent.add(reminder_key)
+                            nama = MHS_ACCOUNTS[who]["name"]
+                            await send_message(
+                                f"⏰ *Reminder 30 menit*\n\n"
+                                f"📖 {mk}\n"
+                                f"🕐 {jam}\n"
+                                f"🏫 Ruang {ruang}\n"
+                                f"👤 {nama}\n\n"
+                                f"_Jangan lupa presensi ya! (autopilot akan jalan di jam mulai)_"
+                            )
 
             # === Autopilot Presensi (HANYA kalau autopilot on) ===
             if autopilot_on and hari_id:
