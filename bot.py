@@ -113,9 +113,21 @@ async def proactive_check():
             if DASH_CONTROL.pop("trigger_tugas", False):
                 await send_message("🔔 Trigger dari dashboard: cek tugas...")
                 for key in KULINO_ACCOUNTS:
+                    nama = KULINO_ACCOUNTS[key]["name"]
+                    await send_message(f"⏳ Menghubungi Kulino {nama}...")
                     tugas = await login_kulino_and_get_tugas(key)
                     if tugas:
-                        await send_message(f"✅ {len(tugas)} tugas untuk {KULINO_ACCOUNTS[key]['name']}")
+                        # Kirim tabel detail
+                        rows = [f"{'No':<4} {'Tugas':<40} {'Deadline':<20}"]
+                        rows.append("-" * 70)
+                        for i, t in enumerate(tugas, 1):
+                            rows.append(f"{i:<4} {t.get('name','?')[:38]:<40} {t.get('deadline','?')[:18]:<20}")
+                        await send_message(f"📝 *Tugas {nama}*\n```\n" + "\n".join(rows) + "\n```")
+                        if os.path.exists(SCREENSHOT_TUGAS):
+                            await send_photo(SCREENSHOT_TUGAS)
+                        await process_and_remind_deadlines(tugas, key, send_message)
+                    else:
+                        await send_message(f"📭 Tidak ada tugas aktif untuk {nama}.")
 
             # === Cek tugas jam 17:00 (sekali sehari) ===
             if hour == 17 and minute < 2 and _tugas_checked_today != today_str:
