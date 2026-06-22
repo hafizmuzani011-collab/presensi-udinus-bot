@@ -116,13 +116,16 @@ _require_token = _require_token_decorator
 # ============ API Routes ============
 @app.route("/")
 def index():
-    return dashboard_page("dashboard", request.args.get("token") or request.headers.get("X-Dash-Token") or DASH_TOKEN)
+    return dashboard_page(request.args.get("token") or request.headers.get("X-Dash-Token") or DASH_TOKEN)
 
 @app.route("/<page>")
 def pages(page):
-    return dashboard_page(page, request.args.get("token") or request.headers.get("X-Dash-Token") or DASH_TOKEN)
+    if page in ("dashboard","jadwal","deadline","history","calendar","log","settings"):
+        from flask import redirect
+        return redirect(f"/?token={request.args.get('token') or request.headers.get('X-Dash-Token') or DASH_TOKEN}#{page}")
+    return index()
 
-def dashboard_page(page, token):
+def dashboard_page(token, page="dashboard"):
     nav_items = [
         ("dashboard", "Dashboard", "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"),
         ("jadwal", "Jadwal", "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"),
