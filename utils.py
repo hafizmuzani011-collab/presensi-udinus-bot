@@ -85,8 +85,8 @@ def parse_deadline(raw_deadline: str, now: datetime) -> str | None:
         h, m = _extract_time(lower, 23, 59)
         return f"{now.strftime('%Y-%m-%d')}T{h:02d}:{m:02d}:00"
 
-    # "27 Mei 2026 12:30 PM" / "Wednesday, 24 June, 12:30 PM"
-    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)(?:,?\s+(\d{4}))?(?:[,\s]+(?:pukul\s*)?(\d{1,2})[.:](\d{2})\s*(am|pm)?)?", text, re.I)
+    # "27 Mei 2026 12:30 PM" / "Wednesday, 24 June, 12:30 PM" / "1 July 2026 at 1:00 PM"
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)(?:,?\s+(\d{4}))?(?:[,\s]+(?:pukul\s*|at\s+)?(\d{1,2})[.:](\d{2})\s*(am|pm)?)?", text, re.I)
     if m:
         day = int(m.group(1))
         month_str = m.group(2).lower()
@@ -94,8 +94,6 @@ def parse_deadline(raw_deadline: str, now: datetime) -> str | None:
         if not month:
             return None
         year = int(m.group(3)) if m.group(3) else now.year
-        if not m.group(3) and datetime(year, month, day) < now - timedelta(days=1):
-            year += 1
         jam, menit = 23, 59
         if m.group(4) and m.group(5):
             jam = int(m.group(4))
@@ -114,7 +112,8 @@ def parse_deadline(raw_deadline: str, now: datetime) -> str | None:
     m = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})[T\s](\d{1,2})[.:](\d{2})", text)
     if m:
         try:
-            return datetime(*map(int, m.groups())).strftime("%Y-%m-%dT%H:%M:%S")
+            y, mo, d, h, mi = map(int, m.groups())
+            return datetime(y, mo, d, h, mi).strftime("%Y-%m-%dT%H:%M:%S")
         except ValueError:
             return None
     return None
