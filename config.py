@@ -4,21 +4,9 @@ import json
 import logging
 import threading
 from datetime import datetime
+from dotenv import load_dotenv
 
-def _load_env():
-    """Load .env file ke os.environ."""
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    if not os.path.exists(env_path):
-        return
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
-
-_load_env()
+load_dotenv()
 
 # ==== Telegram ====
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

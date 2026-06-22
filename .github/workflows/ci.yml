@@ -37,7 +37,7 @@ jobs:
           exit $failed
 
       - name: Install test deps
-        run: pip install pytest httpx flask edge-tts
+        run: pip install pytest pytest-asyncio httpx flask edge-tts
 
       - name: Run tests
         run: python -m pytest test/ --tb=short -q
