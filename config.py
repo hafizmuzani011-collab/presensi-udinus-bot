@@ -25,8 +25,8 @@ CHAT_ID_FILE = "chat_id.txt"
 SCHEDULES_FILE = "schedules.json"
 LOG_FILE = "bot.log"
 TASKS_DEADLINE_FILE = "tasks_deadlines.json"
-SCREENSHOT_PRESENSI = "bukti_presensi.png"
 SCREENSHOT_TUGAS = "bukti_tugas.png"
+SCREENSHOT_PRESENSI = "bukti_presensi.png"
 LOCK_FILE = "bot.lock"
 OFFSET_FILE = "telegram_offset.json"
 
@@ -69,6 +69,7 @@ AUTOPILOT_ENABLED = True
 ALLOWED_CHAT_ID = None
 ALLOWED_CHAT_IDS: list[int] = []
 BOT_START_TIME = datetime.now()
+STATS_FILE = "stats.json"
 STATS = {
     "messages_received": 0,
     "messages_sent": 0,
@@ -77,3 +78,21 @@ STATS = {
     "presensi_done": 0,
     "errors": 0,
 }
+
+def load_stats():
+    """Load stats dari file supaya tidak hilang saat restart."""
+    if os.path.exists(STATS_FILE):
+        try:
+            with open(STATS_FILE) as f:
+                return {**STATS, **json.load(f)}
+        except (OSError, json.JSONDecodeError):
+            pass
+    return STATS
+
+def save_stats():
+    """Simpan stats ke file."""
+    try:
+        with open(STATS_FILE, "w") as f:
+            json.dump(STATS, f, indent=2)
+    except OSError:
+        pass

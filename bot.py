@@ -11,6 +11,15 @@ import instance_lock
 from config import *
 from storage import *
 from tg import send_message, send_photo, get_updates, set_default_chat_id
+
+# Load saved stats
+import json as _json
+if os.path.exists("stats.json"):
+    try:
+        with open("stats.json") as _f:
+            STATS.update(_json.load(_f))
+    except:
+        pass
 from utils import get_schedule_for, process_and_remind_deadlines
 
 # Dashboard control (shared with web dashboard)
@@ -152,6 +161,12 @@ async def proactive_check():
             if minute == 0:
                 if backup_tasks_deadlines():
                     logger.info("Backup tasks_deadlines.json OK")
+                # Simpan stats supaya tidak hilang saat restart
+                try:
+                    with open("stats.json", "w") as sf:
+                        _json.dump(STATS, sf, indent=2)
+                except Exception as e:
+                    logger.error(f"Save stats gagal: {e}")
 
             # === Autopilot Presensi ===
             if AUTOPILOT_ENABLED and hari_id:

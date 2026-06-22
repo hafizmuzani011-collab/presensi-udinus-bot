@@ -435,17 +435,21 @@ el.innerHTML=h||'<p class="text-sm text-gray-400 italic">Data tidak tersedia</p>
 if(countEl)countEl.textContent=total+' orang · '+hariOrder.length+' hari';
 }});}}
 
-function renderDeadlineFull(){{var items=currentData?.deadline?.items||[];doSearch();}}
-function doSearch(){{
-var items=currentData?.deadline?.items||[];
+function renderDeadlineFull(){{
+if(currentData){{var items=currentData?.deadline?.items||[];doSearchWith(items);}}
+else {{ap('/deadline').then(function(d){{doSearchWith(d?.items||[]);}});}}
+}}
+function doSearchWith(items){{
 var q=(document.getElementById('searchDeadline')?.value||'').toLowerCase();
 var u=document.getElementById('filterDeadline')?.value||'all';
 var f=items.filter(function(i){{return i.name.toLowerCase().indexOf(q)>=0&&(u==='all'||i.account===u);}});
 var el=document.getElementById('deadlineFull');
+if(!el)return;
 document.getElementById('deadlineCount').textContent=f.length;
 if(!f.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Tidak ada deadline</p>';return;}}
 el.innerHTML=f.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+i.name+'</div><div class="text-xs text-gray-500 mt-0.5">'+i.account+'</div></div><div class="text-sm font-semibold">'+(i.deadline||'').split('(')[0]+'</div></div>';}}).join('');
 }}
+function doSearch(){{doSearchWith(currentData?.deadline?.items||[]);}}
 
 function renderLogFull(){{
 var s=currentData;
