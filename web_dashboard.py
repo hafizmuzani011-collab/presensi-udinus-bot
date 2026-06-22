@@ -449,7 +449,10 @@ document.getElementById('deadlineCount').textContent=f.length;
 if(!f.length){{el.innerHTML='<p class="text-sm text-gray-400 italic">Tidak ada deadline</p>';return;}}
 el.innerHTML=f.map(function(i){{var u2=i.deadline&&i.deadline.includes('j)');return'<div class="flex items-center justify-between p-3 mb-2 rounded-lg border '+(u2?'bg-red-50 border-red-200':'bg-white border-gray-200')+'"><div><div class="text-sm font-medium">'+i.name+'</div><div class="text-xs text-gray-500 mt-0.5">'+i.account+'</div></div><div class="text-sm font-semibold">'+(i.deadline||'').split('(')[0]+'</div></div>';}}).join('');
 }}
-function doSearch(){{doSearchWith(currentData?.deadline?.items||[]);}}
+function doSearch(){{
+if(currentData?.deadline?.items){{doSearchWith(currentData.deadline.items);}}
+else {{ap('/deadline').then(function(d){{doSearchWith(d?.items||[]);}});}}
+}}
 
 function renderLogFull(){{
 var s=currentData;
