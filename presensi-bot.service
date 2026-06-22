@@ -12,6 +12,9 @@ RestartSec=10
 User=bot
 Environment=PYTHONUNBUFFERED=1
 
+# Dashboard token — ganti dengan token yang sama dengan di .env
+Environment=DASH_TOKEN=nnGJ-cjCwEwFDx6PgwLO0oUX-g_725dOH30dGUXERCs
+
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict

@@ -24,6 +24,21 @@ presensiOnline.png
 presensi.png
 screenshots/*.png
 
+# Runtime data
+logbook/
+presensi_done.json
+presensi_history.json
+tasks_deadlines.json
+holidays.json
+holidays_matched.json
+libur_dan_jadwal.json
+schedules.json
+stats.json
+alias.json
+
+# TTS output
+voices/
+
 # Test artifacts
 test/__pycache__/
 test/screenshots/
