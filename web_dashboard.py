@@ -358,6 +358,9 @@ if(tgt)tgt.classList.remove('hidden');
 location.hash=page;
 if(page==='history')renderHistory();
 if(page==='calendar')renderCalendar();
+if(page==='jadwal')renderJadwalFull();
+if(page==='deadline')doSearch();
+if(page==='log')renderLogFull();
 }}
 function showPageFromHash(){{const h=location.hash.replace('#','')||'dashboard';navigate(h);}}
 function clearHistory(){{if(!confirm('Hapus semua history presensi?'))return;ap('/history/clear','POST').then(r=>{{notify('History dihapus','success');renderHistory();}});}}
