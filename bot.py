@@ -193,6 +193,26 @@ async def proactive_check():
                     else:
                         await send_message(f"📭 Tidak ada tugas aktif untuk {nama}.")
 
+            # === Trigger presensi dari dashboard ===
+            trigger_presensi_who = DASH_CONTROL.get("trigger_presensi", "")
+            if trigger_presensi_who in ("saya", "pacar"):
+                DASH_CONTROL["trigger_presensi"] = ""
+                nama = MHS_ACCOUNTS[trigger_presensi_who]["name"]
+                await send_message(f"🔔 Trigger dari dashboard: presensi {nama}...")
+                ok, msg = await do_presensi_siadin(trigger_presensi_who)
+                if ok:
+                    await send_message(f"✅ Presensi {nama} berhasil!")
+                    await send_photo(SCREENSHOT_PRESENSI)
+                else:
+                    await send_message(f"⚠️ Presensi {nama} gagal: {msg}")
+
+            # === Auto-sync jadwal setiap Minggu 22:00 ===
+            if day_name == "sunday" and hour == 22 and minute < 2:
+                logger.info("Auto-sync jadwal mingguan...")
+                ok, msg = await update_schedules_from_mhs()
+                logger.info(f"Auto-sync jadwal: {msg}")
+                await send_message(f"🔄 Auto-sync jadwal mingguan:\n{msg}")
+
             # === Cek tugas jam 17:00 (sekali sehari) - INDEPENDENT dari autopilot ===
             if hour == 17 and minute < 2 and _tugas_checked_today != today_str:
                 _tugas_checked_today = today_str

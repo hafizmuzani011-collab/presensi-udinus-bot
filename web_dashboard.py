@@ -329,6 +329,13 @@ Dark Mode
 <div><label class="text-xs font-semibold text-gray-500 uppercase">Chat IDs</label><div class="mt-1 text-sm font-mono bg-gray-50 px-3 py-2 rounded border border-gray-200" id="settIds">—</div></div>
 <div class="pt-4 border-t border-gray-100 space-y-2">
 <button onclick="doCleanup()" class="text-sm bg-red-50 text-red-700 px-4 py-2 rounded-lg hover:bg-red-100 border border-red-200 w-full">Hapus Deadline Lewat</button>
+<div class="flex gap-2">
+<select id="presensiWho" class="text-sm bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-gray-700">
+<option value="saya">Hafizh (Saya)</option>
+<option value="pacar">Azfa (Pacar)</option>
+</select>
+<button onclick="triggerPresensi()" class="flex-1 text-sm bg-indigo-50 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-100 border border-indigo-200">Presensi Sekarang</button>
+</div>
 <button onclick="browserNotifyTest()" class="text-sm bg-blue-50 text-blue-700 px-4 py-2 rounded-lg hover:bg-blue-100 border border-blue-200 w-full">Test Browser Notification</button>
 <a href="https://t.me/PresensiUdinus_bot" target="_blank" class="block text-sm bg-green-50 text-green-700 px-4 py-2 rounded-lg hover:bg-green-100 border border-green-200 text-center">Buka Bot di Telegram ↗</a>
 </div>
@@ -554,6 +561,7 @@ document.getElementById('calWeek').textContent=weekStart.toLocaleDateString('id-
 async function doCleanup(){{if(!confirm('Hapus semua deadline yang sudah lewat?'))return;var r=await ap('/cleanup','POST');notify('Dihapus: '+r.removed+' deadline','success');await ld();}}
 async function ta(){{var r=await ap('/control/toggle-autopilot','POST');notify('Autopilot: '+(r.autopilot?'Aktif':'Nonaktif'),'success');ld();}}
 async function tt(){{await ap('/control/trigger-tugas','POST');notify('Tugas check dikirim!','info');}}
+async function triggerPresensi(){{var who=document.getElementById('presensiWho').value;var r=await ap('/control/trigger-presensi?who='+who,'POST');notify('Presensi '+(who==='saya'?'Hafizh':'Azfa')+' dikirim!','info');}}
 function rf(){{ld();}}
 function filterCards(q){{q=q.toLowerCase();var d=currentData?.deadline?.items||[];var f=d.filter(i=>i.name.toLowerCase().includes(q));renderDeadline(f);}}
 function filterByUser(u){{var d=currentData?.deadline?.items||[];var f=u==='all'?d:d.filter(i=>i.account===u);renderDeadline(f);}}
@@ -695,6 +703,19 @@ def trigger_tugas():
     CONTROL["trigger_tugas"] = True
     logger.info("Trigger cek tugas via dashboard")
     return jsonify({"triggered": True})
+
+
+@app.route("/control/trigger-presensi", methods=["POST"])
+@_require_token
+def trigger_presensi():
+    """Trigger presensi manual untuk akun tertentu. Body: {"who": "saya"} or ?who=pacar"""
+    data = request.get_json(silent=True) or {}
+    who = data.get("who") or request.args.get("who", "saya")
+    if who not in ("saya", "pacar"):
+        return jsonify({"error": "Invalid who (saya/pacar)"}), 400
+    CONTROL["trigger_presensi"] = who
+    logger.info(f"Trigger presensi via dashboard: {who}")
+    return jsonify({"triggered": True, "who": who})
 
 
 @app.route("/cleanup", methods=["POST"])
