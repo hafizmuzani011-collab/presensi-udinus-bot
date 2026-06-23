@@ -31,6 +31,7 @@ from storage import (
     cleanup_expired_deadlines, load_chat_ids, load_nilai_cache, load_offset, load_presensi_done,
     load_schedules, load_tasks_deadlines, run_backup, save_chat_id, save_nilai_cache,
     save_offset, save_presensi_done, save_tasks_deadlines, write_logbook, diff_nilai,
+    load_khs_history, save_khs_history,
 )
 from tg import answer_callback, get_updates, make_inline_keyboard, send_message, send_photo, send_document
 from utils import get_schedule_for, process_and_remind_deadlines
@@ -139,6 +140,36 @@ def set_autopilot(enabled: bool) -> None:
 
 
 # ============ Browser Scrapers ============
+def _detect_semester() -> str:
+    """Generate semester label like '2024/2025 Genap'."""
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    if month <= 6:
+        return f"{year-1}/{year} Genap" if month >= 2 else f"{year-1}/{year} Ganjil"
+    return f"{year}/{year+1} Ganjil"
+
+
+def _save_khs_history(who: str, khs: dict) -> None:
+    """Simpan riwayat IP/IPK per semester."""
+    ips = khs.get("ip_semester")
+    ipk = khs.get("ipk")
+    total_sks = khs.get("total_sks", 0)
+    if ips is None and ipk is None:
+        return
+    history = load_khs_history()
+    semester = _detect_semester()
+    entry = history.setdefault(who, {}).setdefault(semester, {})
+    if ips is not None:
+        entry["ips"] = ips
+    if ipk is not None:
+        entry["ipk"] = ipk
+    if total_sks:
+        entry["total_sks"] = total_sks
+    save_khs_history(history)
+    logger.info(f"KHS history saved: {who} {semester} IP={ips} IPK={ipk}")
+
+
 async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
     """Login Kulino, ambil tugas dari Upcoming Events."""
     account = KULINO_ACCOUNTS[account_key]
@@ -421,6 +452,7 @@ async def _check_nilai_update(minute: int) -> None:
                     await page.click("button:has-text('Masuk ke SiAdin')")
                 khs = await tb.scrape_khs(page, account)
             new_map = {m["kdmk"]: m for m in khs["matkul"]}
+            _save_khs_history(who, khs)
             diff = diff_nilai({who: cached_courses}, {who: new_map})
             if diff:
                 lines = [f"🔔 *Nilai Baru!* ({account['name']})"]
@@ -900,6 +932,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
                     await page.click("button:has-text('Masuk ke SiAdin')")
                 khs = await tb.scrape_khs(page, account)
             await send_message(format_khs_message(khs, account["name"]))
+            _save_khs_history(target, khs)
             # Save to cache for diff detection
             cache = load_nilai_cache()
             cache[target] = {m["kdmk"]: m for m in khs["matkul"]}

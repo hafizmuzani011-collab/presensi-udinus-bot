@@ -164,6 +164,32 @@ Dark Mode
 </div>
 </div>
 
+<!-- KHS HISTORY -->
+<div id="page-khs" class="page-section hidden">
+<div class="mb-8 flex items-center justify-between">
+<h2 class="text-2xl font-bold">Perkembangan IPK</h2>
+<div class="flex items-center gap-2">
+<select id="khsFilter" onchange="renderKHSChart()" class="text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5">
+<option value="saya">Hafizh (Saya)</option>
+<option value="pacar">Azfa (Pacar)</option>
+</select>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+<div class="bg-white border border-gray-200 rounded-xl p-6">
+<h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-5">Grafik IP Semester (IPS)</h3>
+<svg id="ipsChart" viewBox="0 0 500 200" class="w-full h-48"></svg>
+</div>
+<div class="bg-white border border-gray-200 rounded-xl p-6">
+<h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-5">Grafik IP Kumulatif (IPK)</h3>
+<svg id="ipkChart" viewBox="0 0 500 200" class="w-full h-48"></svg>
+</div>
+</div>
+<div class="mt-6 bg-white border border-gray-200 rounded-xl p-6">
+<div id="khsTable"><p class="text-sm text-gray-400 italic">Memuat data KHS...</p></div>
+</div>
+</div>
+
 <!-- LOG -->
 <div id="page-log" class="page-section hidden">
 <div class="mb-8 flex items-center justify-between"><h2 class="text-2xl font-bold">Log Aktivitas</h2><button onclick="document.getElementById('logFull').innerHTML='<p class=\\'text-sm text-gray-400 italic\\'>Kosong</p>'" class="text-sm text-red-600 hover:text-red-800">Hapus</button></div>
@@ -255,6 +281,7 @@ if(tgt)tgt.classList.remove('hidden');
 location.hash=page;
 if(page==='history')renderHistory();
 if(page==='calendar')renderCalendar();
+if(page==='khs')renderKHSChart();
 if(page==='jadwal')renderJadwalFull();
 if(page==='deadline')doSearch();
 if(page==='log')renderLogFull();
@@ -476,6 +503,39 @@ var months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','D
 var t=days[d.getDay()]+', '+pad(d.getDate())+' '+months[d.getMonth()]+' '+d.getFullYear()+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())+' WIB';
 var el=document.getElementById('realtimeClock');
 if(el)el.textContent=t;
+}
+
+async function renderKHSChart(){
+var who=document.getElementById('khsFilter').value;
+var data=await ap('/khs/history');
+var tableDiv=document.getElementById('khsTable');
+if(!data||!data[who]||Object.keys(data[who]).length===0){tableDiv.innerHTML='<p class="text-sm text-gray-400 italic">Belum ada riwayat IPK. Silakan cek nilai di menu Telegram bot terlebih dahulu.</p>';document.getElementById('ipsChart').innerHTML='';document.getElementById('ipkChart').innerHTML='';return;}
+var history=data[who];
+var semesters=Object.keys(history).sort();
+var tableHtml='<table class="w-full text-left border-collapse text-sm"><thead><tr class="border-b border-gray-200 text-gray-500 uppercase text-xs"><th class="py-2">Semester</th><th class="py-2">SKS</th><th class="py-2">IP Semester (IPS)</th><th class="py-2">IPK</th></tr></thead><tbody class="divide-y divide-gray-100 font-medium">';
+semesters.forEach(function(sem){var item=history[sem];tableHtml+='<tr><td class="py-3">'+esc(sem)+'</td><td class="py-3">'+esc(item.total_sks||'-')+'</td><td class="py-3 text-indigo-600">'+esc(item.ips!==undefined?item.ips.toFixed(2):'-')+'</td><td class="py-3 text-green-600">'+esc(item.ipk!==undefined?item.ipk.toFixed(2):'-')+'</td></tr>';});
+tableHtml+='</tbody></table>';
+tableDiv.innerHTML=tableHtml;
+var renderBarChart=function(svgId,key,color){
+var svg=document.getElementById(svgId);if(!svg)return;
+var w=500,h=200,pad=30;
+var bw=(w-2*pad)/Math.max(semesters.length,1);
+var bars=[];
+for(var v=1;v<=4;v++){var yLine=h-pad-(v/4)*(h-2*pad);bars.push('<line x1="'+pad+'" y1="'+yLine+'" x2="'+(w-pad)+'" y2="'+yLine+'" stroke="#f3f4f6" stroke-dasharray="4"/>');bars.push('<text x="'+(pad-8)+'" y="'+(yLine+4)+'" text-anchor="end" font-size="10" fill="#9ca3af">'+v.toFixed(1)+'</text>');}
+semesters.forEach(function(sem,idx){
+var val=history[sem][key]||0.0;
+var bh=(val/4.0)*(h-2*pad);
+var x=pad+idx*bw+bw*0.15;
+var bw2=bw*0.7;
+var y=h-pad-bh;
+bars.push('<rect x="'+x+'" y="'+y+'" width="'+bw2+'" height="'+bh+'" rx="4" fill="'+color+'"><title>'+sem+': '+val.toFixed(2)+'</title></rect>');
+if(val>0)bars.push('<text x="'+(x+bw2/2)+'" y="'+(y-6)+'" text-anchor="middle" font-size="11" font-weight="bold" fill="#1f2937">'+val.toFixed(2)+'</text>');
+bars.push('<text x="'+(x+bw2/2)+'" y="'+(h-10)+'" text-anchor="middle" font-size="10" fill="#6b7280">'+esc(sem.split(' ')[0])+'</text>');
+});
+svg.innerHTML=bars.join('');
+};
+renderBarChart('ipsChart','ips','#6366f1');
+renderBarChart('ipkChart','ipk','#10b981');
 }
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js');}
 let deferredPrompt=null;

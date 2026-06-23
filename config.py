@@ -33,6 +33,7 @@ PRESENSI_DONE_FILE = os.path.join(RUNTIME_DIR, "presensi_done.json")
 PRESENSI_HISTORY_FILE = os.path.join(RUNTIME_DIR, "presensi_history.json")
 STATS_FILE = os.path.join(RUNTIME_DIR, "stats.json")
 NILAI_FILE = os.path.join(RUNTIME_DIR, "nilai_cache.json")
+KHS_HISTORY_FILE = os.path.join(RUNTIME_DIR, "khs_history.json")
 MATERIALS_CACHE_FILE = os.path.join(RUNTIME_DIR, "materials_cache.json")
 
 SCREENSHOT_TUGAS = os.path.join(SCREENSHOTS_DIR, "bukti_tugas.png")

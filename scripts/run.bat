@@ -3,7 +3,7 @@ REM ========================================
 REM Presensi Udinus Bot - Auto-start launcher
 REM ========================================
 title Presensi Udinus Bot
-cd /d "%~dp0"
+cd /d "%~dp0\.."
 
 echo [%date% %time%] Starting bot...
 
@@ -12,7 +12,7 @@ REM Loop: restart otomatis kalau crash, dengan cooldown
 echo [%date% %time%] Bot instance starting...
 
 REM Hapus lock lama supaya gak false positive
-if exist bot.lock del bot.lock
+if exist data\runtime\bot.lock del data\runtime\bot.lock
 
 python bot.py
 set EXIT_CODE=%ERRORLEVEL%

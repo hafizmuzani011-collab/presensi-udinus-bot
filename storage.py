@@ -12,7 +12,7 @@ from config import (
     CHAT_ID_FILE, OFFSET_FILE,
     SCHEDULES_FILE, TASKS_DEADLINE_FILE, LOG_DIR,
     PRESENSI_DONE_FILE, PRESENSI_HISTORY_FILE, NILAI_FILE,
-    MATERIALS_CACHE_FILE,
+    MATERIALS_CACHE_FILE, KHS_HISTORY_FILE,
 )
 from file_utils import atomic_write
 
@@ -347,5 +347,24 @@ def load_material_cache() -> dict:
 def save_material_cache(data: dict) -> None:
     try:
         atomic_write(MATERIALS_CACHE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+    except OSError:
+        pass
+
+
+# ============ KHS History ============
+def load_khs_history() -> dict:
+    """Load history KHS: {akun: {semester_id: {ipk, ips, total_sks}}}."""
+    if not os.path.exists(KHS_HISTORY_FILE):
+        return {}
+    try:
+        with open(KHS_HISTORY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def save_khs_history(data: dict) -> None:
+    try:
+        atomic_write(KHS_HISTORY_FILE, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError:
         pass
