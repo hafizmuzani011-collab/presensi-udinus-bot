@@ -1,7 +1,6 @@
 """Test dashboard rate limiting — 429 responses."""
 import json
 import os
-import time
 import pytest
 
 DASH_TOKEN = "presensi123"

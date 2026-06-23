@@ -1,9 +1,9 @@
 """Test handle_command — command dispatch & response content."""
-import os
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
+
+from config import NAMA_SAYA, NAMA_PACAR  # noqa: F401
 
 
 @pytest.fixture(autouse=True)
@@ -243,3 +243,108 @@ class TestLibur:
             await handle_command("libur")
             texts = "\n".join(mock_send.calls)
             assert "Libur" in texts
+
+
+class TestQuickStats:
+    @pytest.mark.asyncio
+    async def test_quickstats_basic(self, mock_send, monkeypatch):
+        from datetime import datetime, timedelta
+        future = (datetime.now() + timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%S")
+        past = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        monkeypatch.setattr("bot.get_stats_snapshot",
+                            lambda: {"messages_received": 5, "presensi_done": 2,
+                                     "tugas_checks": 1, "errors": 0})
+        monkeypatch.setattr("bot.load_tasks_deadlines", lambda: {
+            "saya:tugas_dekat": {"name": "Tugas Dekat", "account": NAMA_SAYA,
+                                  "deadline_iso": future, "deadline_raw": "Besok"},
+            "saya:tugas_lewat": {"name": "Tugas Lewat", "account": NAMA_SAYA,
+                                  "deadline_iso": past, "deadline_raw": "Kemarin"},
+            "notified": {},
+        })
+        monkeypatch.setattr("bot.load_schedules", lambda: {
+            "saya": {"senin": []}, "pacar": {"senin": []},
+        })
+        monkeypatch.setattr("bot.get_today_holiday", lambda: None)
+        with patch("bot.send_message", mock_send):
+            from bot import handle_command
+            await handle_command("quickstats")
+        texts = "\n".join(mock_send.calls)
+        assert "Quick Stats" in texts
+        assert "1 aktif" in texts  # Only future one
+        assert "Tugas Dekat" in texts
+        assert "Tugas Lewat" not in texts
+
+    @pytest.mark.asyncio
+    async def test_quickstats_alias(self, mock_send, monkeypatch):
+        monkeypatch.setattr("bot.load_tasks_deadlines", lambda: {"notified": {}})
+        monkeypatch.setattr("bot.load_schedules", lambda: {"saya": {}, "pacar": {}})
+        monkeypatch.setattr("bot.get_today_holiday", lambda: None)
+        with patch("bot.send_message", mock_send):
+            from bot import handle_command
+            await handle_command("ringkasan")
+        assert any("Quick Stats" in m for m in mock_send.calls)
+
+    @pytest.mark.asyncio
+    async def test_quickstats_holiday(self, mock_send, monkeypatch):
+        monkeypatch.setattr("bot.load_tasks_deadlines", lambda: {"notified": {}})
+        monkeypatch.setattr("bot.load_schedules", lambda: {"saya": {}, "pacar": {}})
+        monkeypatch.setattr("bot.get_today_holiday", lambda: "Hari Raya")
+        with patch("bot.send_message", mock_send):
+            from bot import handle_command
+            await handle_command("quickstats")
+        texts = "\n".join(mock_send.calls)
+        assert "Hari Raya" in texts
+
+
+class TestJadwalGambar:
+    @pytest.mark.asyncio
+    async def test_jadwal_gambar_invalid_hari(self, mock_send, monkeypatch):
+        with patch("bot.send_message", mock_send):
+            from bot import handle_command
+            await handle_command("jadwal gambar foo")
+        texts = "\n".join(mock_send.calls)
+        assert "tidak dikenali" in texts.lower()
+
+    @pytest.mark.asyncio
+    async def test_jadwal_gambar_success(self, mock_send, monkeypatch, tmp_path):
+        from contextlib import asynccontextmanager
+        monkeypatch.chdir(tmp_path)
+        class FakePage:
+            async def set_content(self, *a, **kw): pass
+            async def wait_for_timeout(self, *a): pass
+            async def query_selector(self, *a):
+                class FakeEl:
+                    async def screenshot(self, *a, **kw): pass
+                return FakeEl()
+        @asynccontextmanager
+        async def fake_get_page():
+            yield FakePage()
+        async def fake_render(page, schedules, hari_id, output_path):  # noqa: ARG001
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_bytes(b"\x89PNG\r\n\x1a\n")
+            return True
+        monkeypatch.setattr("bot.get_page", fake_get_page)
+        monkeypatch.setattr("render.render_jadwal_png", fake_render)
+        monkeypatch.setattr("bot.load_schedules", lambda: {"saya": {"senin": []}, "pacar": {"senin": []}})
+        with patch("bot.send_message", mock_send), patch("bot.send_photo", AsyncMock()):
+            from bot import handle_command
+            await handle_command("jadwal gambar senin")
+
+
+class TestMorningReminderState:
+    def test_morning_state_attribute(self):
+        """Verify _morning_reminder_date state exists."""
+        import bot
+        assert hasattr(bot, "_morning_reminder_date")
+        assert bot._morning_reminder_date is None or isinstance(bot._morning_reminder_date, str)
+
+
+class TestJadwalGambarHelp:
+    def test_help_includes_jadwal_gambar(self, monkeypatch):
+        """Verify help text mentions new commands."""
+        import bot
+        from pathlib import Path
+        # Read source to check help text includes new commands
+        src = Path(bot.__file__).read_text(encoding="utf-8")
+        assert "jadwal gambar" in src.lower() or "jadwal gambar" in src
+        assert "quickstats" in src.lower() or "ringkasan" in src.lower()

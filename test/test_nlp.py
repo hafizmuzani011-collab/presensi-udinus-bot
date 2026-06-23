@@ -1,5 +1,4 @@
 """Test NLP parser untuk jadwal & deadline questions."""
-import pytest
 from nlp import parse_question, answer_jadwal, answer_presensi
 
 

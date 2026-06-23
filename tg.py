@@ -126,6 +126,36 @@ async def send_photo(photo_path: str, chat_ids: list[int] | None = None) -> bool
     return success
 
 
+async def send_document(doc_path: str, caption: str = "", chat_ids: list[int] | None = None) -> bool:
+    """Kirim file/dokumen."""
+    targets = _get_target_chat_ids(chat_ids)
+    if not targets or not os.path.exists(doc_path):
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+    success = False
+    
+    # Read chunk by chunk is better for memory, but for Telegram max 50MB files
+    # reading to memory is usually fine. Using file object directly with httpx is safer for memory.
+    client = await _get_client(60)
+    for chat_id in targets:
+        try:
+            with open(doc_path, "rb") as f:
+                # httpx supports file object directly
+                files = {"document": (os.path.basename(doc_path), f)}
+                data = {"chat_id": str(chat_id)}
+                if caption:
+                    data["caption"] = caption
+                r = await client.post(url, data=data, files=files)
+            if r.status_code == 200:
+                logger.info(f"Dokumen terkirim ke {chat_id}")
+                success = True
+            else:
+                logger.error(f"Gagal kirim dokumen ke {chat_id}: {r.status_code} {r.text}")
+        except Exception as e:
+            logger.error(f"Gagal kirim dokumen ke {chat_id}: {e}")
+    return success
+
+
 async def get_updates(offset: int | None = None) -> list[dict]:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"timeout": 30}

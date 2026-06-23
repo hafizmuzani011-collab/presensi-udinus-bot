@@ -1,7 +1,5 @@
 """Test storage layer - file I/O functions."""
 import json
-import os
-from datetime import datetime, timedelta
 from pathlib import Path
 import pytest
 from storage import (
@@ -19,6 +17,10 @@ from storage import (
 def isolate(tmp_path, monkeypatch):
     """Setiap test pakai folder tmp sendiri."""
     monkeypatch.chdir(tmp_path)
+    # Create subdirs matching config paths
+    from config import RUNTIME_DIR
+    Path(RUNTIME_DIR).mkdir(parents=True, exist_ok=True)
+    yield
 
 
 class TestChatIds:
@@ -45,11 +47,15 @@ class TestChatIds:
         assert load_chat_ids() == [-100]
 
     def test_invalid_line_skipped(self):
-        Path("chat_id.txt").write_text("123,not_a_number,456")
+        from config import CHAT_ID_FILE
+        Path(CHAT_ID_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(CHAT_ID_FILE).write_text("123,not_a_number,456")
         assert load_chat_ids() == [123, 456]
 
     def test_empty_file(self):
-        Path("chat_id.txt").write_text("")
+        from config import CHAT_ID_FILE
+        Path(CHAT_ID_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(CHAT_ID_FILE).write_text("")
         assert load_chat_ids() == []
 
 
@@ -72,7 +78,9 @@ class TestPresensiDone:
         assert data["keys"] == ["b"]
 
     def test_corrupt_json(self):
-        Path("presensi_done.json").write_text("not json")
+        from config import PRESENSI_DONE_FILE
+        Path(PRESENSI_DONE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(PRESENSI_DONE_FILE).write_text("not json")
         data = load_presensi_done()
         assert data == {"date": "", "keys": []}
 
@@ -134,48 +142,64 @@ class TestTasksDeadlines:
         assert removed == 0
 
     def test_backup(self):
+        from config import TASKS_DEADLINE_FILE
         cache = {"saya:t": {"deadline_iso": self.FUTURE, "name": "t", "account": "H"}}
         save_tasks_deadlines(cache)
         assert backup_tasks_deadlines()
-        bak = Path("tasks_deadlines.json.bak")
+        bak = Path(TASKS_DEADLINE_FILE + ".bak")
         assert bak.exists()
         data = json.loads(bak.read_text())
         assert "saya:t" in data
 
     def test_corrupt_file(self):
-        Path("tasks_deadlines.json").write_text("not json")
+        from config import TASKS_DEADLINE_FILE
+        Path(TASKS_DEADLINE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(TASKS_DEADLINE_FILE).write_text("not json")
         assert load_tasks_deadlines() == {"notified": {}}
 
 
 class TestSchedulesValidation:
     def test_valid(self):
+        from config import SCHEDULES_FILE
         data = {"saya": {"senin": [["07:00", "Basis Data", "D.2.J"]]}}
-        Path("schedules.json").write_text(json.dumps(data))
+        Path(SCHEDULES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(SCHEDULES_FILE).write_text(json.dumps(data))
         assert load_schedules() == data
 
     def test_corrupt_json(self):
-        Path("schedules.json").write_text("not json")
+        from config import SCHEDULES_FILE
+        Path(SCHEDULES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(SCHEDULES_FILE).write_text("not json")
         assert load_schedules() == {}
 
     def test_invalid_type(self):
-        Path("schedules.json").write_text("[]")  # not dict
+        from config import SCHEDULES_FILE
+        Path(SCHEDULES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(SCHEDULES_FILE).write_text("[]")  # not dict
         assert load_schedules() == {}
 
     def test_invalid_slot(self):
-        Path("schedules.json").write_text('{"saya": {"senin": ["bad"]}}')
+        from config import SCHEDULES_FILE
+        Path(SCHEDULES_FILE).parent.mkdir(parents=True, exist_ok=True)
+        Path(SCHEDULES_FILE).write_text('{"saya": {"senin": ["bad"]}}')
         assert load_schedules() == {}
 
 
 class TestRunBackup:
     def test_run_backup_all(self):
-        Path("tasks_deadlines.json").write_text(json.dumps({"notified": {}}))
-        Path("schedules.json").write_text(json.dumps({"saya": {}}))
-        Path("presensi_history.json").write_text(json.dumps([]))
+        from config import TASKS_DEADLINE_FILE, SCHEDULES_FILE, PRESENSI_HISTORY_FILE
+        for p, data in [
+            (TASKS_DEADLINE_FILE, json.dumps({"notified": {}})),
+            (SCHEDULES_FILE, json.dumps({"saya": {}})),
+            (PRESENSI_HISTORY_FILE, json.dumps([])),
+        ]:
+            Path(p).parent.mkdir(parents=True, exist_ok=True)
+            Path(p).write_text(data)
         count = run_backup()
         assert count == 3
-        assert Path("tasks_deadlines.json.bak").exists()
-        assert Path("schedules.json.bak").exists()
-        assert Path("presensi_history.json.bak").exists()
+        assert Path(TASKS_DEADLINE_FILE + ".bak").exists()
+        assert Path(SCHEDULES_FILE + ".bak").exists()
+        assert Path(PRESENSI_HISTORY_FILE + ".bak").exists()
 
     def test_run_backup_missing_files(self):
         count = run_backup()

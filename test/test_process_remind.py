@@ -3,12 +3,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 import pytest
+from config import TASKS_DEADLINE_FILE
 from utils import process_and_remind_deadlines
 
 
 @pytest.fixture(autouse=True)
 def isolate(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    from config import TASKS_DEADLINE_FILE
+    Path(TASKS_DEADLINE_FILE).parent.mkdir(parents=True, exist_ok=True)
 
 
 @pytest.fixture
@@ -63,7 +66,7 @@ class TestParseAndStore:
         send = make_send_recorder()
         tasks = [{"name": "Tugas Basis Data", "course": "BD", "deadline": "27 June 2026 12:30 PM"}]
         asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
-        cache = json.loads(Path("tasks_deadlines.json").read_text())
+        cache = json.loads(Path(TASKS_DEADLINE_FILE).read_text())
         assert "saya:Tugas Basis Data" in cache
         assert cache["saya:Tugas Basis Data"]["course"] == "BD"
 
@@ -71,16 +74,16 @@ class TestParseAndStore:
         send = make_send_recorder()
         tasks = [{"name": "", "deadline": "27 June 2026 12:30 PM"}]
         asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
-        assert Path("tasks_deadlines.json").exists() is False
+        assert not Path(TASKS_DEADLINE_FILE).exists()
 
     def test_unchanged_task_not_resaved(self, fixed_now):
         send = make_send_recorder()
         tasks = [{"name": "Tugas A", "course": "MK", "deadline": "27 June 2026 12:30 PM"}]
         asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
-        mtime1 = Path("tasks_deadlines.json").stat().st_mtime
+        mtime1 = Path(TASKS_DEADLINE_FILE).stat().st_mtime
 
         asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
-        mtime2 = Path("tasks_deadlines.json").stat().st_mtime
+        mtime2 = Path(TASKS_DEADLINE_FILE).stat().st_mtime
         # No dirty = no rewrite
         assert mtime1 == mtime2
 
@@ -88,7 +91,7 @@ class TestParseAndStore:
 class TestReminderH6:
     def test_h6_sends_reminder(self, fixed_now):
         # Pre-populate cache with task in 5h
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:urgent": {
                 "name": "urgent", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "27 June 2026 12:30 PM",
@@ -100,11 +103,11 @@ class TestReminderH6:
         asyncio_run(process_and_remind_deadlines([], "saya", send))
         assert any("Mendekat" in m for m in send.calls)
         # notified flag set
-        cache = json.loads(Path("tasks_deadlines.json").read_text())
+        cache = json.loads(Path(TASKS_DEADLINE_FILE).read_text())
         assert cache["notified"].get("saya:urgent:h6") is True
 
     def test_h6_not_sent_twice(self, fixed_now):
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:urgent": {
                 "name": "urgent", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "27 June 2026 12:30 PM",
@@ -119,7 +122,7 @@ class TestReminderH6:
 
 class TestReminderH12:
     def test_h12_sends(self, fixed_now):
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:soon": {
                 "name": "soon", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "27 June 2026 12:30 PM",
@@ -130,12 +133,12 @@ class TestReminderH12:
         send = make_send_recorder()
         asyncio_run(process_and_remind_deadlines([], "saya", send))
         assert any("H-12" in m for m in send.calls)
-        cache = json.loads(Path("tasks_deadlines.json").read_text())
+        cache = json.loads(Path(TASKS_DEADLINE_FILE).read_text())
         assert cache["notified"].get("saya:soon:h12") is True
 
     def test_h6_priority_over_h12(self, fixed_now):
         # Task 5h away, h12 not yet sent — but h6 should fire, not h12
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:urgent": {
                 "name": "urgent", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "27 June 2026 12:30 PM",
@@ -153,7 +156,7 @@ class TestReminderH12:
 
 class TestNoReminder:
     def test_distant_task_no_reminder(self, fixed_now):
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:far": {
                 "name": "far", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "27 June 2026 12:30 PM",
@@ -166,7 +169,7 @@ class TestNoReminder:
         assert len(send.calls) == 0
 
     def test_past_deadline_skipped(self, fixed_now):
-        Path("tasks_deadlines.json").write_text(json.dumps({
+        Path(TASKS_DEADLINE_FILE).write_text(json.dumps({
             "saya:overdue": {
                 "name": "overdue", "course": "MK", "account": "Hafizh",
                 "deadline_raw": "1 June 2026 12:30 PM",
@@ -192,7 +195,7 @@ class TestDedup:
         ]
         send = make_send_recorder()
         asyncio_run(process_and_remind_deadlines(tasks, "saya", send))
-        cache = json.loads(Path("tasks_deadlines.json").read_text())
+        cache = json.loads(Path(TASKS_DEADLINE_FILE).read_text())
         # Key is "saya:Tugas UTS" — second task overwrites first
         assert "saya:Tugas UTS" in cache
 

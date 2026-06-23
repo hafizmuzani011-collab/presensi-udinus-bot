@@ -2,53 +2,69 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
 .venv/
+venv/
+*.egg-info/
 
-# Bot runtime
+# Bot runtime & generated data
+data/
 bot.lock
-telegram_offset.json
 *.log
+*.log.*
 *.bak
+presensi-bot.service
 
 # Secrets & runtime
 .env
-chat_id.txt
-presensi_history.json
-
-# Auto-generated
-stats.json
-tasks_deadlines.json.bak
-
-# Screenshots & dynamic files
-bukti_*.png
-presensiOnline.png
-presensi.png
-screenshots/*.png
-
-# Runtime data
-logbook/
-presensi_done.json
-presensi_history.json
-tasks_deadlines.json
-holidays.json
-holidays_matched.json
-libur_dan_jadwal.json
-schedules.json
-stats.json
-alias.json
-
-# TTS output
-voices/
+.env.local
+secrets.json
 
 # Test artifacts
+.pytest_cache/
+.ruff_cache/
 test/__pycache__/
 test/screenshots/
+.coverage
+htmlcov/
+.tox/
+.nox/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.opencode/
 
+# Auto-generated runtime files
+stats.json
+telegram_offset.json
+presensi_history.json
+bukti_*.png
+presensiOnline.png
+voices/
+logbook/
+presensi_done.json
+schedules.json
+tasks_deadlines.json
+holidays.json
+holidays_matched.json
+libur_dan_jadwal.json
+alias.json
+
+# Build / dist
+build/
+dist/
+*.spec
+
+# Service
+*.pid
+*.sock

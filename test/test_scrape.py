@@ -1,5 +1,4 @@
 """Test extract_tasks_from_text — Kulino page text parser."""
-import pytest
 from telegram_bot import extract_tasks_from_text
 
 

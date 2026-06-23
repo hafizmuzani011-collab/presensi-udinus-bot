@@ -1,4 +1,4 @@
-# Presensi Udinus Bot
+# Presensi Bot
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-121%20passing-brightgreen.svg)](./test)

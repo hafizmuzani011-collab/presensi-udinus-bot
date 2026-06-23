@@ -5,29 +5,50 @@ import logging
 import threading
 from datetime import datetime
 from dotenv import load_dotenv
+from file_utils import atomic_write
+
 
 load_dotenv()
+
+# ==== Data directory (relative to CWD; override via CONFIG_DATA_DIR env) ====
+DATA_DIR = os.environ.get("CONFIG_DATA_DIR", "data")
+LOG_DIR = os.path.join(DATA_DIR, "logbook")
+LOG_FILE = os.path.join(DATA_DIR, "logs", "bot.log")
+RUNTIME_DIR = os.path.join(DATA_DIR, "runtime")
+SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
+VOICES_DIR = os.path.join(DATA_DIR, "voices")
 
 # ==== Telegram ====
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN tidak ditemukan! Buat file .env dari .env.example")
-CHAT_ID_FILE = "chat_id.txt"
+CHAT_ID_FILE = os.path.join(RUNTIME_DIR, "chat_id.txt")
 
 # ==== Files ====
-SCHEDULES_FILE = "schedules.json"
-LOG_FILE = "bot.log"
-TASKS_DEADLINE_FILE = "tasks_deadlines.json"
-SCREENSHOT_TUGAS = "bukti_tugas.png"
-SCREENSHOT_PRESENSI = "bukti_presensi.png"
-LOCK_FILE = "bot.lock"
-OFFSET_FILE = "telegram_offset.json"
-PRESENSI_DONE_FILE = "presensi_done.json"
-PRESENSI_HISTORY_FILE = "presensi_history.json"
+SCHEDULES_FILE = os.path.join(RUNTIME_DIR, "schedules.json")
+TASKS_DEADLINE_FILE = os.path.join(RUNTIME_DIR, "tasks_deadlines.json")
+LOCK_FILE = os.path.join(RUNTIME_DIR, "bot.lock")
+OFFSET_FILE = os.path.join(RUNTIME_DIR, "telegram_offset.json")
+PRESENSI_DONE_FILE = os.path.join(RUNTIME_DIR, "presensi_done.json")
+PRESENSI_HISTORY_FILE = os.path.join(RUNTIME_DIR, "presensi_history.json")
+STATS_FILE = os.path.join(RUNTIME_DIR, "stats.json")
+NILAI_FILE = os.path.join(RUNTIME_DIR, "nilai_cache.json")
+MATERIALS_CACHE_FILE = os.path.join(RUNTIME_DIR, "materials_cache.json")
+
+SCREENSHOT_TUGAS = os.path.join(SCREENSHOTS_DIR, "bukti_tugas.png")
+SCREENSHOT_PRESENSI = os.path.join(SCREENSHOTS_DIR, "bukti_presensi.png")
+SCREENSHOT_JADWAL = os.path.join(SCREENSHOTS_DIR, "bukti_jadwal.png")
 
 # ==== URLs ====
 KULINO_URL = "https://kulino.dinus.ac.id/"
 MHS_URL = "https://mhs.dinus.ac.id/"
+
+# ==== Display names (bisa dikustom dari .env) ====
+NAMA_SAYA = os.getenv("NAMA_SAYA", "Hafizh")
+NAMA_PACAR = os.getenv("NAMA_PACAR", "Azfa")
+
+# ==== Admin bootstrap (optional, recommended) ====
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
 
 # ==== Credentials (WAJIB dari .env) ====
 def _req_env(key, display_name):
@@ -38,26 +59,26 @@ def _req_env(key, display_name):
 
 KULINO_ACCOUNTS = {
     "saya": {
-        "nim": _req_env("KULINO_SAYA_NIM", "Kulino NIM Hafizh"),
-        "password": _req_env("KULINO_SAYA_PASS", "Kulino password Hafizh"),
-        "name": "Hafizh",
+        "nim": _req_env("KULINO_SAYA_NIM", "Kulino NIM"),
+        "password": _req_env("KULINO_SAYA_PASS", "Kulino password"),
+        "name": NAMA_SAYA,
     },
     "pacar": {
-        "nim": _req_env("KULINO_PACAR_NIM", "Kulino NIM Azfa"),
-        "password": _req_env("KULINO_PACAR_PASS", "Kulino password Azfa"),
-        "name": "Azfa",
+        "nim": _req_env("KULINO_PACAR_NIM", "Kulino NIM pacar"),
+        "password": _req_env("KULINO_PACAR_PASS", "Kulino password pacar"),
+        "name": NAMA_PACAR,
     },
 }
 MHS_ACCOUNTS = {
     "saya": {
-        "nim": _req_env("MHS_SAYA_NIM", "MHS NIM Hafizh"),
-        "password": _req_env("MHS_SAYA_PASS", "MHS password Hafizh"),
-        "name": "Hafizh",
+        "nim": _req_env("MHS_SAYA_NIM", "MHS NIM"),
+        "password": _req_env("MHS_SAYA_PASS", "MHS password"),
+        "name": NAMA_SAYA,
     },
     "pacar": {
-        "nim": _req_env("MHS_PACAR_NIM", "MHS NIM Azfa"),
-        "password": _req_env("MHS_PACAR_PASS", "MHS password Azfa"),
-        "name": "Azfa",
+        "nim": _req_env("MHS_PACAR_NIM", "MHS NIM pacar"),
+        "password": _req_env("MHS_PACAR_PASS", "MHS password pacar"),
+        "name": NAMA_PACAR,
     },
 }
 
@@ -69,8 +90,6 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash-free")
 ALLOWED_CHAT_ID = None
 ALLOWED_CHAT_IDS: list[int] = []
 BOT_START_TIME = datetime.now()
-LOG_DIR = "logbook"
-STATS_FILE = "stats.json"
 STATS = {
     "messages_received": 0,
     "messages_sent": 0,
@@ -95,13 +114,10 @@ def get_stats_snapshot() -> dict:
 
 
 def save_stats() -> bool:
-    """Persist STATS to disk (atomic write)."""
+    """Persist STATS to disk (atomic write + fsync)."""
     try:
         snapshot = get_stats_snapshot()
-        tmp = STATS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(snapshot, f, indent=2)
-        os.replace(tmp, STATS_FILE)
+        atomic_write(STATS_FILE, json.dumps(snapshot, indent=2))
         return True
     except OSError as e:
         logging.getLogger(__name__).error(f"Save stats gagal: {e}")

@@ -1,25 +1,13 @@
 """Helper untuk jadwal & deadline tasks."""
+import logging
 import re
 from datetime import datetime, timedelta
 
 from config import KULINO_ACCOUNTS
+from constants import HARI_ID, HARI_MAP
 from storage import load_schedules, load_tasks_deadlines, save_tasks_deadlines
 
-HARI_ID = {
-    "monday": "senin", "tuesday": "selasa", "wednesday": "rabu",
-    "thursday": "kamis", "friday": "jumat", "saturday": "sabtu",
-    "sunday": "minggu",
-}
-
-HARI_MAP = {
-    "senin": "senin", "selasa": "selasa", "rabu": "rabu", "kamis": "kamis",
-    "jumat": "jumat", "sabtu": "sabtu", "minggu": "minggu",
-    "monday": "senin", "tuesday": "selasa", "wednesday": "rabu",
-    "thursday": "kamis", "friday": "jumat", "saturday": "sabtu",
-    "sunday": "minggu",
-    "mon": "senin", "tue": "selasa", "wed": "rabu", "thu": "kamis",
-    "fri": "jumat", "sat": "sabtu", "sun": "minggu",
-}
+logger = logging.getLogger(__name__)
 
 
 def get_schedule_for(name: str, hari: str) -> str:
@@ -47,7 +35,7 @@ def get_schedule_for(name: str, hari: str) -> str:
 
     jadwal = schedules[name].get(hari_id, [])
     if not jadwal:
-        return f"🎉 {hari_id.title()} ({tanggal_str}) tidak ada jadwal {name.title()}."
+        return f"🎉 {hari_id.title()} ({tanggal_str}) Libur!"
 
     lines = [f"📅 *Jadwal {name.title()} - {hari_id.title()} ({tanggal_str})*\n"]
     for jam, mk, ruang in jadwal:
@@ -124,8 +112,10 @@ def _extract_time(text: str, default_h: int, default_m: int) -> tuple[int, int]:
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
         ampm = m.group(3)
-        if ampm == "pm" and h < 12: h += 12
-        elif ampm == "am" and h == 12: h = 0
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
         return h, mi
     return default_h, default_m
 
@@ -135,9 +125,23 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
     account_name = KULINO_ACCOUNTS[account_key]["name"]
     cache = load_tasks_deadlines()
     now = datetime.now()
-    reminded = False
-    dirty = False
 
+    cache, dirty = _update_deadlines_cache(cache, tasks, account_key, account_name, now)
+    cache, reminded = await _send_due_reminders(cache, account_key, send_message, now)
+
+    if dirty or reminded:
+        cache["notified"] = cache.get("notified", {})
+        save_tasks_deadlines(cache)
+        if reminded:
+            count = sum(1 for k in cache if k != "notified")
+            logger.info(f"Deadline reminders sent | tasks updated: {count}")
+
+
+def _update_deadlines_cache(
+    cache: dict, tasks: list[dict], account_key: str, account_name: str, now: datetime,
+) -> tuple[dict, bool]:
+    """Insert/update tasks in cache. Return (cache, dirty)."""
+    dirty = False
     for task in tasks:
         raw = (task.get("deadline") or "").strip()
         name = (task.get("name") or "").strip()
@@ -156,8 +160,16 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
             "deadline_raw": raw, "deadline_iso": parsed,
         }
         dirty = True
-        import logging
-        logging.getLogger(__name__).info(f"Deadline: {task_key} -> {parsed}")
+        logger.info(f"Deadline: {task_key} -> {parsed}")
+    return cache, dirty
+
+
+async def _send_due_reminders(
+    cache: dict, account_key: str, send_message, now: datetime,
+) -> tuple[dict, bool]:
+    """Check all deadlines, send h12/h6 reminders if due. Return (cache, reminded)."""
+    reminded = False
+    notified = cache.get("notified", {})
 
     for task_key, data in cache.items():
         if task_key == "notified":
@@ -173,37 +185,39 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
         if diff <= 0:
             continue
         hours = diff / 3600
-        notified = cache.get("notified", {})
 
         if hours <= 6 and not notified.get(f"{task_key}:h6"):
-            msg = (f"🔴 *Deadline Mendekat!* ({int(hours)} jam)\n\n"
-                   f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
-                   f"📅 {data['deadline_raw']}")
-            if await send_message(msg):
+            if await _send_h6_reminder(data, int(hours), send_message):
                 notified[f"{task_key}:h6"] = True
                 reminded = True
-                dirty = True
-                # Voice reminder
-                try:
-                    from tts import text_to_voice, EDGE_TTS_AVAILABLE
-                    if EDGE_TTS_AVAILABLE:
-                        voice_text = f"Hai kak {data['account']}, tugas {data['name']} deadline tinggal {int(hours)} jam lagi, jangan lupa dikerjakan ya!"
-                        await text_to_voice(voice_text)
-                except Exception:
-                    pass
-
         elif 6 < hours <= 12 and not notified.get(f"{task_key}:h12"):
-            msg = (f"⚠️ *Pengingat Deadline* H-12\n\n"
-                   f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
-                   f"📅 {data['deadline_raw']}")
-            if await send_message(msg):
+            if await _send_h12_reminder(data, send_message):
                 notified[f"{task_key}:h12"] = True
                 reminded = True
-                dirty = True
 
-    if dirty:
-        if reminded:
-            import logging
-            logging.getLogger("telegram_bot").info(f"Deadline reminders sent | tasks updated: {sum(1 for k in cache if k != 'notified')}")
-        cache["notified"] = cache.get("notified", {})
-        save_tasks_deadlines(cache)
+    cache["notified"] = notified
+    return cache, reminded
+
+
+async def _send_h6_reminder(data: dict, hours_left: int, send_message) -> bool:
+    msg = (f"🔴 *Deadline Mendekat!* ({hours_left} jam)\n\n"
+           f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
+           f"📅 {data['deadline_raw']}")
+    if not await send_message(msg):
+        return False
+    try:
+        from tts import text_to_voice, EDGE_TTS_AVAILABLE
+        if EDGE_TTS_AVAILABLE:
+            voice_text = (f"Hai kak {data['account']}, tugas {data['name']} "
+                          f"deadline tinggal {hours_left} jam lagi, jangan lupa dikerjakan ya!")
+            await text_to_voice(voice_text)
+    except Exception:
+        pass
+    return True
+
+
+async def _send_h12_reminder(data: dict, send_message) -> bool:
+    msg = (f"⚠️ *Pengingat Deadline* H-12\n\n"
+           f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
+           f"📅 {data['deadline_raw']}")
+    return await send_message(msg)

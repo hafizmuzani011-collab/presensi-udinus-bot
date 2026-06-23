@@ -10,17 +10,9 @@ User bisa tanya dengan bahasa sehari-hari:
 import re
 from datetime import datetime, timedelta
 
-HARI = {
-    "senin": "senin", "selasa": "selasa", "rabu": "rabu",
-    "kamis": "kamis", "jumat": "jumat", "sabtu": "sabtu", "minggu": "minggu",
-    "monday": "senin", "tuesday": "selasa", "wednesday": "rabu",
-    "thursday": "kamis", "friday": "jumat", "saturday": "sabtu", "sunday": "minggu",
-    "mon": "senin", "tue": "selasa", "wed": "rabu", "thu": "kamis",
-    "fri": "jumat", "sat": "sabtu", "sun": "minggu",
-}
+from constants import HARI_MAP, KATA_HARI
 
-KATA_HARI = ["senin", "selasa", "rabu", "kamis", "jumat", "sabtu", "minggu",
-             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+HARI = HARI_MAP  # full mapping: indo + eng + abbrev -> indo
 
 
 def parse_question(text: str) -> dict:
@@ -75,7 +67,7 @@ def parse_question(text: str) -> dict:
         result["hari"] = HARI.get(datetime.now().strftime("%A").lower())
 
     # Detect specific day
-    for h, h_id in HARI.items():
+    for h, h_id in HARI_MAP.items():
         if re.search(r"\b" + re.escape(h) + r"\b", text):
             result["hari"] = h_id
             break
