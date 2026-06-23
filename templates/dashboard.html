@@ -461,24 +461,41 @@ var now=new Date();
 var weekStart=new Date(now);
 weekStart.setDate(now.getDate()-now.getDay()+calOffset*7);
 var hariOrder=['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
-var h='<div class="grid grid-cols-7 gap-2">';
+var colors=[{bg:'bg-indigo-100',text:'text-indigo-800',border:'border-indigo-300'},{bg:'bg-emerald-100',text:'text-emerald-800',border:'border-emerald-300'}];
+var h='<div class="grid grid-cols-7 gap-1.5">';
+// Header bar (nama hari)
+for(var i=0;i<7;i++){var day=new Date(weekStart);day.setDate(weekStart.getDate()+i);var isToday=day.toDateString()===now.toDateString();h+='<div class="text-center py-2 '+(isToday?'bg-gray-900 text-white rounded-lg':'text-gray-500')+'"><div class="text-[10px] font-semibold uppercase">'+hariOrder[i].slice(0,3)+'</div><div class="text-lg font-bold'+(isToday?'':' text-gray-900')+'">'+day.getDate()+'</div></div>';}
+h+='</div>';
+// Body grid
+h+='<div class="grid grid-cols-7 gap-1.5 mt-1">';
 for(var i=0;i<7;i++){
-var day=new Date(weekStart);
-day.setDate(weekStart.getDate()+i);
-var ds=day.toISOString().split('T')[0];
+var day=new Date(weekStart);day.setDate(weekStart.getDate()+i);
 var hariId=hariOrder[i].toLowerCase();
 var slots=[];
-for(var n in j){if(j[n][hariId])slots=slots.concat(j[n][hariId].map(function(s){return{nama:n,slot:s};}));}
-var isToday=ds===now.toISOString().split('T')[0];
-h+='<div class="border '+(isToday?'border-green-500 bg-green-50':'border-gray-200')+' rounded-lg p-2 min-h-32"><div class="text-xs font-semibold text-gray-500 mb-2">'+hariOrder[i]+'<br><span class="text-sm text-gray-900 font-bold">'+day.getDate()+'</span></div>';
+var userIdx=0;
+for(var n in j){
+if(j[n][hariId]){slots=slots.concat(j[n][hariId].map(function(s){return{nama:n,warna:userIdx,slot:s};}));}
+userIdx++;
+}
+var isToday=day.toDateString()===now.toDateString();
+h+='<div class="border '+(isToday?'border-gray-900 ring-1 ring-gray-900':'border-gray-200')+' rounded-lg p-1.5 min-h-[120px] flex flex-col gap-0.5 bg-white">';
+if(slots.length===0){h+='<div class="flex-1 flex items-center justify-center"><span class="text-[10px] text-gray-300 italic">—</span></div>';}
+else{
+slots.sort(function(a,b){return(a.slot[0]||'').localeCompare(b.slot[0]||'');});
 slots.forEach(function(s){
-h+='<div class="text-[10px] bg-blue-100 text-blue-800 rounded px-1 py-0.5 mb-1 truncate" title="'+esc(s.nama)+': '+esc(s.slot[1])+' ('+esc(s.slot[2])+')">'+esc(s.slot[0].slice(0,5))+' '+esc(s.slot[1].slice(0,12))+'</div>';
+var c=s.warna;
+h+='<div class="text-[11px] '+colors[c].bg+' '+colors[c].text+' px-1.5 py-1 rounded-md border-l-2 '+colors[c].border+'">';
+h+='<div class="font-semibold truncate">'+esc(s.slot[0].slice(0,5))+'</div>';
+h+='<div class="truncate leading-tight">'+esc(s.slot[1].slice(0,18))+'</div>';
+h+='<div class="text-[9px] opacity-70 truncate">'+esc(s.slot[2])+' • '+esc(s.nama)+'</div>';
+h+='</div>';
 });
+}
 h+='</div>';
 }
 h+='</div>';
 document.getElementById('calendarView').innerHTML=h;
-document.getElementById('calWeek').textContent=weekStart.toLocaleDateString('id-ID',{day:'numeric',month:'short'})+' - '+new Date(weekStart.getTime()+6*86400000).toLocaleDateString('id-ID',{day:'numeric',month:'short'});
+document.getElementById('calWeek').textContent=weekStart.toLocaleDateString('id-ID',{day:'numeric',month:'short'})+' — '+new Date(weekStart.getTime()+6*86400000).toLocaleDateString('id-ID',{day:'numeric',month:'short'});
 }
 
 async function doCleanup(){if(!confirm('Hapus semua deadline yang sudah lewat?'))return;var r=await ap('/cleanup','POST');notify('Dihapus: '+r.removed+' deadline','success');await ld();}
