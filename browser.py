@@ -1,18 +1,15 @@
 """Shared browser context — persistent context, thread-safe, auto-reconnect."""
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from playwright.async_api import async_playwright, Browser, BrowserContext
+from playwright.async_api import async_playwright, Browser
 
 logger = logging.getLogger(__name__)
 
 # Global state
 _playwright = None
 _browser: Browser | None = None
-_persistent_context: BrowserContext | None = None
 _lock = asyncio.Lock()
 
 
@@ -56,41 +53,21 @@ async def _ensure_browser() -> Browser:
         raise RuntimeError("Browser gagal launch setelah retry")
 
 
-async def _ensure_context() -> BrowserContext:
-    """Persistent context dengan cookies tersimpan di user_data_dir."""
-    global _persistent_context
-
-    if _persistent_context is not None:
-        try:
-            pages = _persistent_context.pages
-            if pages is not None:
-                return _persistent_context
-        except Exception:
-            pass
-        _persistent_context = None
-
-    browser = await _ensure_browser()
-    user_data = os.path.join(Path.home(), ".presensi-bot", "browser-data")
-    os.makedirs(user_data, exist_ok=True)
-
-    _persistent_context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        storage_state=os.path.join(user_data, "storage.json") if os.path.exists(os.path.join(user_data, "storage.json")) else None,
-    )
-    return _persistent_context
-
-
 @asynccontextmanager
 async def get_page():
-    """Context manager: reusable persistent context, yield new page, auto-close page."""
+    """Context manager: yield new page in a fresh ISOLATED context, auto-close context."""
+    context = None
     page = None
     try:
-        ctx = await _ensure_context()
-        page = await ctx.new_page()
+        browser = await _ensure_browser()
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        )
+        page = await context.new_page()
         yield page
     finally:
         if page:
@@ -98,23 +75,16 @@ async def get_page():
                 await page.close()
             except Exception:
                 pass
+        if context:
+            try:
+                await context.close()
+            except Exception:
+                pass
 
 
 async def close_browser():
     """Shutdown browser (panggil saat bot exit)."""
-    global _playwright, _browser, _persistent_context
-
-    if _persistent_context:
-        try:
-            user_data = os.path.join(Path.home(), ".presensi-bot", "browser-data")
-            await _persistent_context.storage_state(path=os.path.join(user_data, "storage.json"))
-        except Exception:
-            pass
-        try:
-            await _persistent_context.close()
-        except Exception:
-            pass
-        _persistent_context = None
+    global _playwright, _browser
 
     if _browser:
         try:
@@ -129,3 +99,21 @@ async def close_browser():
             pass
         _playwright = None
     logger.info("Browser closed")
+
+
+async def login_siadin_portal(page, nim: str, password: str, wait_selector: str = "") -> bool:
+    """Helper login terpusat untuk portal SiAdin / MHS Dinus."""
+    try:
+        await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(2000)
+        await page.fill("#username", nim)
+        await page.fill("#password", password)
+        async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
+            await page.click("button:has-text('Masuk ke SiAdin')")
+        if wait_selector:
+            await page.wait_for_selector(wait_selector, timeout=10000)
+        return True
+    except Exception as e:
+        logger.error(f"login_siadin_portal failed: {e}")
+        return False
+

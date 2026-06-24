@@ -8,6 +8,7 @@ from calendar import monthrange as _monthrange
 from datetime import datetime
 from pathlib import Path
 
+import threading
 from config import (
     CHAT_ID_FILE, OFFSET_FILE,
     SCHEDULES_FILE, TASKS_DEADLINE_FILE, LOG_DIR,
@@ -18,12 +19,16 @@ from file_utils import atomic_write
 
 logger = logging.getLogger(__name__)
 
+# Global lock for all json storage files to prevent race conditions
+# between Flask dashboard thread and Asyncio Bot Loop
+_storage_lock = threading.Lock()
 
 # ============ Chat ID ============
 def load_chat_ids() -> list[int]:
-    if not os.path.exists(CHAT_ID_FILE):
-        return []
-    data = Path(CHAT_ID_FILE).read_text().strip()
+    with _storage_lock:
+        if not os.path.exists(CHAT_ID_FILE):
+            return []
+        data = Path(CHAT_ID_FILE).read_text().strip()
     ids = []
     for p in data.split(","):
         p = p.strip()
@@ -41,73 +46,80 @@ def save_chat_id(chat_id: int) -> None:
     ids = load_chat_ids()
     if chat_id not in ids:
         ids.append(chat_id)
-    atomic_write(CHAT_ID_FILE, ",".join(str(i) for i in ids))
+    with _storage_lock:
+        atomic_write(CHAT_ID_FILE, ",".join(str(i) for i in ids))
 
 
 # ============ Offset (lock sekarang di instance_lock.py) ============
 
 
 def save_offset(offset: int) -> None:
-    try:
-        atomic_write(OFFSET_FILE, json.dumps({"offset": offset}))
-    except OSError:
-        pass
+    with _storage_lock:
+        try:
+            atomic_write(OFFSET_FILE, json.dumps({"offset": offset}))
+        except OSError:
+            pass
 
 
 def load_offset() -> int | None:
-    if not os.path.exists(OFFSET_FILE):
-        return None
-    try:
-        with open(OFFSET_FILE) as f:
-            return int(json.load(f).get("offset"))
-    except (OSError, ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"Load offset corrupt: {e}")
-        return None
+    with _storage_lock:
+        if not os.path.exists(OFFSET_FILE):
+            return None
+        try:
+            with open(OFFSET_FILE) as f:
+                return int(json.load(f).get("offset"))
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Load offset corrupt: {e}")
+            return None
 
 
 # ============ Schedules ============
 def load_schedules() -> dict:
-    if not os.path.exists(SCHEDULES_FILE):
-        return {}
-    try:
-        with open(SCHEDULES_FILE) as f:
-            data = json.load(f)
-        # Validasi schema: harus dict of dict of list
-        if not isinstance(data, dict):
-            logger.warning(f"{SCHEDULES_FILE}: invalid type, reset")
+    with _storage_lock:
+        if not os.path.exists(SCHEDULES_FILE):
             return {}
-        for who, days in data.items():
-            if not isinstance(days, dict):
-                logger.warning(f"{SCHEDULES_FILE}: {who} not a dict, reset")
-                return {}
-            for day, slots in days.items():
-                if not isinstance(slots, list):
-                    logger.warning(f"{SCHEDULES_FILE}: {who}/{day} not a list, reset")
-                    return {}
-                for slot in slots:
-                    if not isinstance(slot, list) or len(slot) != 3:
-                        logger.warning(f"{SCHEDULES_FILE}: {who}/{day} invalid slot, reset")
-                        return {}
-        return data
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"{SCHEDULES_FILE} corrupt, reset: {e}")
+        try:
+            with open(SCHEDULES_FILE) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"{SCHEDULES_FILE} corrupt, reset: {e}")
+            return {}
+    
+    # Validasi schema: harus dict of dict of list
+    if not isinstance(data, dict):
+        logger.warning(f"{SCHEDULES_FILE}: invalid type, reset")
         return {}
+    for who, days in data.items():
+        if not isinstance(days, dict):
+            logger.warning(f"{SCHEDULES_FILE}: {who} not a dict, reset")
+            return {}
+        for day, slots in days.items():
+            if not isinstance(slots, list):
+                logger.warning(f"{SCHEDULES_FILE}: {who}/{day} not a list, reset")
+                return {}
+            for slot in slots:
+                if not isinstance(slot, list) or len(slot) != 3:
+                    logger.warning(f"{SCHEDULES_FILE}: {who}/{day} invalid slot, reset")
+                    return {}
+    return data
 
 
 # ============ Tasks Deadlines ============
 def load_tasks_deadlines() -> dict:
-    if not os.path.exists(TASKS_DEADLINE_FILE):
-        return {"notified": {}}
-    try:
-        with open(TASKS_DEADLINE_FILE) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Tasks deadlines corrupt, reset: {e}")
-        return {"notified": {}}
+    with _storage_lock:
+        if not os.path.exists(TASKS_DEADLINE_FILE):
+            return {"notified": {}}
+        try:
+            with open(TASKS_DEADLINE_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Tasks deadlines corrupt, reset: {e}")
+            return {"notified": {}}
 
 
 def save_tasks_deadlines(data: dict) -> None:
-    atomic_write(TASKS_DEADLINE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+    with _storage_lock:
+        atomic_write(TASKS_DEADLINE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def backup_tasks_deadlines() -> bool:
@@ -179,25 +191,27 @@ def write_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang:
 # ============ Presensi Done (persist across restart) ============
 def load_presensi_done() -> dict:
     """Load {_date, keys: [...]}. Auto-reset jika tanggal berbeda."""
-    if not os.path.exists(PRESENSI_DONE_FILE):
-        return {"date": "", "keys": []}
-    try:
-        with open(PRESENSI_DONE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError) as e:
-        logger.warning(f"Presensi done corrupt, reset: {e}")
-        return {"date": "", "keys": []}
+    with _storage_lock:
+        if not os.path.exists(PRESENSI_DONE_FILE):
+            return {"date": "", "keys": []}
+        try:
+            with open(PRESENSI_DONE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            logger.warning(f"Presensi done corrupt, reset: {e}")
+            return {"date": "", "keys": []}
 
 
 def save_presensi_done(date_str: str, keys: set) -> None:
     """Simpan sesi presensi yang sudah selesai. Auto-reset besoknya."""
-    try:
-        atomic_write(
-            PRESENSI_DONE_FILE,
-            json.dumps({"date": date_str, "keys": sorted(keys)}, indent=2, ensure_ascii=False),
-        )
-    except OSError:
-        pass
+    with _storage_lock:
+        try:
+            atomic_write(
+                PRESENSI_DONE_FILE,
+                json.dumps({"date": date_str, "keys": sorted(keys)}, indent=2, ensure_ascii=False),
+            )
+        except OSError:
+            pass
 
 
 # ============ Presensi Stats / Attendance Tracker ============
@@ -303,20 +317,22 @@ def attendance_alert(results: list[dict], threshold: float = 75.0) -> list[str]:
 # ============ Nilai Cache (untuk auto-detect nilai baru) ============
 def load_nilai_cache() -> dict:
     """Load cache nilai terakhir per akun: {akun: {kdmk: {huruf, matkul, ...}}}."""
-    if not os.path.exists(NILAI_FILE):
-        return {}
-    try:
-        with open(NILAI_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return {}
+    with _storage_lock:
+        if not os.path.exists(NILAI_FILE):
+            return {}
+        try:
+            with open(NILAI_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
 
 
 def save_nilai_cache(data: dict) -> None:
-    try:
-        atomic_write(NILAI_FILE, json.dumps(data, indent=2, ensure_ascii=False))
-    except OSError:
-        pass
+    with _storage_lock:
+        try:
+            atomic_write(NILAI_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+        except OSError:
+            pass
 
 
 def diff_nilai(old: dict, new: dict) -> list[dict]:
@@ -335,36 +351,40 @@ def diff_nilai(old: dict, new: dict) -> list[dict]:
 
 
 def load_material_cache() -> dict:
-    if not os.path.exists(MATERIALS_CACHE_FILE):
-        return {}
-    try:
-        with open(MATERIALS_CACHE_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return {}
+    with _storage_lock:
+        if not os.path.exists(MATERIALS_CACHE_FILE):
+            return {}
+        try:
+            with open(MATERIALS_CACHE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
 
 
 def save_material_cache(data: dict) -> None:
-    try:
-        atomic_write(MATERIALS_CACHE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
-    except OSError:
-        pass
+    with _storage_lock:
+        try:
+            atomic_write(MATERIALS_CACHE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+        except OSError:
+            pass
 
 
 # ============ KHS History ============
 def load_khs_history() -> dict:
     """Load history KHS: {akun: {semester_id: {ipk, ips, total_sks}}}."""
-    if not os.path.exists(KHS_HISTORY_FILE):
-        return {}
-    try:
-        with open(KHS_HISTORY_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return {}
+    with _storage_lock:
+        if not os.path.exists(KHS_HISTORY_FILE):
+            return {}
+        try:
+            with open(KHS_HISTORY_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
 
 
 def save_khs_history(data: dict) -> None:
-    try:
-        atomic_write(KHS_HISTORY_FILE, json.dumps(data, indent=2, ensure_ascii=False))
-    except OSError:
-        pass
+    with _storage_lock:
+        try:
+            atomic_write(KHS_HISTORY_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+        except OSError:
+            pass

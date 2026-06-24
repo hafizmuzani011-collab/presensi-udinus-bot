@@ -2,11 +2,11 @@
 import logging
 import re
 from pathlib import Path
+from config import SCREENSHOT_TUGAS
 
 logger = logging.getLogger(__name__)
 
 KULINO_URL = "https://kulino.dinus.ac.id/"
-SCREENSHOT_TUGAS = "bukti_tugas.png"
 MATERIALS_DIR = Path("data") / "materials"
 
 
@@ -141,16 +141,20 @@ async def scrape_course_files(page, course_url: str) -> list[dict]:
     files = await page.evaluate("""() => {
         const items = [];
         // Moodle resource table format
-        const rows = document.querySelectorAll('table.generaltable tbody tr, .resourcecontent tr, li.resource, .activity.resource');
+        const rows = document.querySelectorAll('table.generaltable tbody tr, .resourcecontent tr, li.resource, .activity.resource, .activity-item');
         rows.forEach(row => {
-            const link = row.querySelector('a[href*="pluginfile.php"], a[href*="mod_resource"], a[href*="download"');
+            const link = row.querySelector('a[href*="pluginfile.php"], a[href*="mod_resource"], a[href*="download"]');
             if (!link) return;
             const name = link.innerText?.trim();
             const href = link.getAttribute('href') || '';
             if (!name || name.length < 2) return;
             const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
-            const timeEl = row.querySelector('.date, .time, .text-muted, td:last-child');
-            const modified = timeEl ? timeEl.innerText?.trim() : '';
+            const timeEl = row.querySelector('.date, .time, .text-muted, .dimmed_text, .activity-dates, td:last-child');
+            let modified = timeEl ? timeEl.innerText?.trim() : '';
+            if (!modified) {
+                const match = row.innerText.match(/\b\d{1,2}\s+[a-zA-Z]+\s+\d{4}\b/i);
+                if (match) modified = match[0];
+            }
             items.push({
                 name: name,
                 file_url: href.startsWith('http') ? href : new URL(href, window.location.origin).href,

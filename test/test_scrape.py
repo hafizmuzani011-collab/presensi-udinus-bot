@@ -1,5 +1,5 @@
 """Test extract_tasks_from_text — Kulino page text parser."""
-from telegram_bot import extract_tasks_from_text
+from scrapers import extract_tasks_from_text
 
 
 class TestExtractTasksFromText:

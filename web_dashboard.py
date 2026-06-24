@@ -35,6 +35,12 @@ logger.info("Dashboard token loaded from DASH_TOKEN env")
 
 app = Flask(__name__)
 
+# Konfigurasi Flask log agar terintegrasi dengan root logger (RotatingFileHandler bot.log)
+log_werkzeug = logging.getLogger('werkzeug')
+log_werkzeug.setLevel(logging.INFO)
+for handler in logging.getLogger().handlers:
+    log_werkzeug.addHandler(handler)
+
 # === Control & History (in-memory, share dengan bot.py) ===
 # CONTROL, CONTROL_LOCK, get_control, set_control, consume_control
 # di-import dari config.py agar tidak circular.
@@ -102,7 +108,10 @@ def format_tanggal(dt_str):
         return dt_str
 
 def _get_token() -> str | None:
-    """Extract token from: cookie > header > URL param."""
+    """Extract token from: Authorization Bearer > Cookie > X-Dash-Token header > token param."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
     return (request.cookies.get("dash_token")
             or request.headers.get("X-Dash-Token")
             or request.args.get("token"))
@@ -479,7 +488,7 @@ def export_csv():
 
 # ============ Start Server ============
 def start_server(port=8787, debug=False):
-    print(f"Dashboard: http://127.0.0.1:{port}?token={DASH_TOKEN}")
+    print(f"Dashboard: http://127.0.0.1:{port}?token=... (Or use Authorization: Bearer {DASH_TOKEN})")
     app.run(host="127.0.0.1", port=port, debug=debug, use_reloader=False, threaded=True)
 
 

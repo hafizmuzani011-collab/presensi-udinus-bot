@@ -2,10 +2,10 @@
 import logging
 import re
 from constants import PRESENSI_FAIL_PATTERNS, PRESENSI_SUCCESS_PATTERNS, PRESENSI_SUCCESS_SELECTOR
+from config import SCREENSHOT_PRESENSI
 
 logger = logging.getLogger(__name__)
 
-SCREENSHOT_PRESENSI = "bukti_presensi.png"
 MHS_URL = "https://mhs.dinus.ac.id/"
 
 
@@ -101,7 +101,14 @@ async def _verify_presensi_success(page) -> tuple[bool, str]:
         except Exception:
             pass
 
-        body_text = (await page.inner_text("body")).lower()
+        try:
+            content_el = await page.query_selector("main, #content, .container, .presensi-card, .card")
+            if content_el:
+                body_text = (await content_el.inner_text()).lower()
+            else:
+                body_text = (await page.inner_text("body")).lower()
+        except Exception:
+            body_text = (await page.inner_text("body")).lower()
 
         for pat in PRESENSI_SUCCESS_PATTERNS:
             if pat in body_text:
@@ -155,13 +162,9 @@ async def _verify_presensi_success(page) -> tuple[bool, str]:
 
 async def scrape_siadin_presensi(page, mhs_akun: dict) -> tuple[bool, str]:
     logger.info(f"Presensi online untuk {mhs_akun['name']}...")
+    from browser import login_siadin_portal
 
-    await page.goto(MHS_URL, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(2000)
-    await page.fill("#username", mhs_akun["nim"])
-    await page.fill("#password", mhs_akun["password"])
-    async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
-        await page.click("button:has-text('Masuk ke SiAdin')")
+    await login_siadin_portal(page, mhs_akun["nim"], mhs_akun["password"])
 
     await page.goto("https://mhs.dinus.ac.id/akademik/presensiOnline",
                    wait_until="networkidle", timeout=30000)

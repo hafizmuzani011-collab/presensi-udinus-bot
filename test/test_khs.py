@@ -1,6 +1,6 @@
 """Test KHS/Nilai scraper + formatter + diff detection."""
 
-from telegram_bot import format_khs_message, scrape_khs
+from scrapers import format_khs_message, scrape_khs
 
 
 SAMPLE_KHS = {

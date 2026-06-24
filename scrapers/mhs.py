@@ -1,6 +1,7 @@
 ﻿"""MHS scraper — jadwal kuliah."""
 import logging
 import re
+from browser import login_siadin_portal
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,7 @@ async def login_mhs_and_scrape_jadwal(page, mhs_akun: dict, semester: str = "202
 
     logger.info(f"Login MHS & scrape jadwal untuk {mhs_akun['name']}...")
 
-    await page.goto(MHS_URL, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(2000)
-    await page.fill("#username", mhs_akun["nim"])
-    await page.fill("#password", mhs_akun["password"])
-    async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
-        await page.click("button:has-text('Masuk ke SiAdin')")
+    await login_siadin_portal(page, mhs_akun["nim"], mhs_akun["password"])
     await page.goto(f"{MHS_URL}akademik", wait_until="networkidle", timeout=30000)
     await page.wait_for_timeout(3000)
 

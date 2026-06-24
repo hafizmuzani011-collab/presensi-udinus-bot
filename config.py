@@ -115,10 +115,10 @@ def get_stats_snapshot() -> dict:
 
 
 def save_stats() -> bool:
-    """Persist STATS to disk (atomic write + fsync)."""
+    """Persist STATS to disk (quick write without fsync — stats is non-critical)."""
     try:
         snapshot = get_stats_snapshot()
-        atomic_write(STATS_FILE, json.dumps(snapshot, indent=2))
+        atomic_write(STATS_FILE, json.dumps(snapshot, indent=2), use_fsync=False)
         return True
     except OSError as e:
         logging.getLogger(__name__).error(f"Save stats gagal: {e}")

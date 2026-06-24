@@ -9,18 +9,15 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import instance_lock
-import telegram_bot as tb
-from telegram_bot import format_attendance_message, format_khs_message
-from aliases import add_alias, remove_alias, resolve_alias
+import scrapers as tb
+from scrapers import format_khs_message
 from browser import close_browser, get_page
 from config import (
-    ADMIN_CHAT_ID, KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, LOG_DIR,
-    NAMA_PACAR, NAMA_SAYA, STATS_FILE, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
-    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, ALLOWED_CHAT_IDS,
-    get_stats_snapshot, save_stats, inc_stat,
+    ADMIN_CHAT_ID, KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, NAMA_PACAR, NAMA_SAYA, STATS_FILE, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
+    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, save_stats, inc_stat,
 )
 from constants import (
     BROWSER_NAV_TIMEOUT, BROWSER_NETWORK_IDLE_TIMEOUT, BROWSER_SETTLE_MS,
@@ -28,14 +25,15 @@ from constants import (
     SNOOZE_DURATION_SECONDS,
 )
 from storage import (
-    cleanup_expired_deadlines, load_chat_ids, load_nilai_cache, load_offset, load_presensi_done,
-    load_schedules, load_tasks_deadlines, run_backup, save_chat_id, save_nilai_cache,
-    save_offset, save_presensi_done, save_tasks_deadlines, write_logbook, diff_nilai,
+    load_chat_ids, load_nilai_cache, load_offset, load_presensi_done,
+    load_schedules, run_backup, save_chat_id, save_nilai_cache,
+    save_offset, save_presensi_done, write_logbook, diff_nilai,
     load_khs_history, save_khs_history,
 )
 from tg import answer_callback, get_updates, make_inline_keyboard, send_message, send_photo, send_document
-from utils import get_schedule_for, process_and_remind_deadlines
+from utils import process_and_remind_deadlines
 from storage import load_material_cache, save_material_cache
+import handlers
 
 # Load saved stats
 if os.path.exists(STATS_FILE):
@@ -125,6 +123,7 @@ logger = logging.getLogger(__name__)
 
 # Bot state
 ALLOWED_CHAT_ID = None
+ALLOWED_CHAT_IDS = []
 _polling_backoff = 1.0
 
 
@@ -175,6 +174,13 @@ async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
     account = KULINO_ACCOUNTS[account_key]
     await send_message(f"⏳ Menghubungi Kulino {account['name']}...")
 
+    # Hapus screenshot lama sebelum scrape tugas
+    if os.path.exists(SCREENSHOT_TUGAS):
+        try:
+            os.remove(SCREENSHOT_TUGAS)
+        except OSError:
+            pass
+
     async with get_page() as page:
         try:
             await page.goto(KULINO_URL, wait_until="domcontentloaded", timeout=BROWSER_NAV_TIMEOUT)
@@ -185,6 +191,13 @@ async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
             await page.wait_for_timeout(BROWSER_SETTLE_MS)
 
             login_form = await page.query_selector("#inputName")
+
+            # Ambil screenshot dulu sebagai bukti (walaupun gagal login)
+            try:
+                await page.screenshot(path=SCREENSHOT_TUGAS, full_page=True)
+            except Exception:
+                pass
+
             if login_form:
                 logger.warning("Login Kulino gagal: form login masih muncul")
                 return []
@@ -193,6 +206,11 @@ async def login_kulino_and_get_tugas(account_key: str) -> list[dict]:
             return tugas
         except Exception as e:
             logger.error(f"Error Kulino: {e}")
+            # Ambil screenshot error sebagai bukti
+            try:
+                await page.screenshot(path=SCREENSHOT_TUGAS, full_page=True)
+            except Exception:
+                pass
             return []
 
 
@@ -201,6 +219,13 @@ async def do_presensi_siadin(account_key: str) -> tuple[bool, str]:
     account = MHS_ACCOUNTS[account_key]
     max_retries = 3
     last_msg = ""
+    
+    # Hapus screenshot lama sebelum presensi
+    if os.path.exists(SCREENSHOT_PRESENSI):
+        try:
+            os.remove(SCREENSHOT_PRESENSI)
+        except OSError:
+            pass
     
     for attempt in range(1, max_retries + 1):
         if attempt == 1:
@@ -293,6 +318,8 @@ async def _handle_dashboard_triggers() -> None:
                 await process_and_remind_deadlines(tugas, key, send_message)
             else:
                 await send_message(f"📭 Tidak ada tugas aktif untuk {nama}.")
+                if os.path.exists(SCREENSHOT_TUGAS):
+                    await send_photo(SCREENSHOT_TUGAS)
 
     trigger_presensi_who = consume_control("trigger_presensi", "")
     if trigger_presensi_who in ("saya", "pacar"):
@@ -605,7 +632,7 @@ async def proactive_check() -> None:
             # Cek materi tiap jam (pada menit ke-15)
             if minute == 15:
                 for target in ("saya", "pacar"):
-                    await check_materials_for(target)
+                    await check_materials_for(target, silent=True)
 
             today_holiday = get_today_holiday()
             await _check_morning_reminder(hour, minute, hari_id, today_holiday, today_str)
@@ -621,426 +648,62 @@ async def proactive_check() -> None:
             _proactive_backoff = min(_proactive_backoff * 2, 300)
 
 
-# ============ Command Handlers ============
-async def handle_command(text: str, chat_id: int | None = None) -> None:
-    text = text.strip()
-    t = text.lower()
+# ============ Materi Kulino ============
+async def check_materials_for(account_key: str, course_query: str = "", silent: bool = False) -> None:
+    from scrapers.kulino import check_new_materials
+    account = KULINO_ACCOUNTS[account_key]
 
-    alias_cmd = resolve_alias(text)
-    if alias_cmd:
-        text = alias_cmd
-        t = text.lower()
-
-    if t in ("/start", "start", "halo", "hai", "hi"):
-        await send_message("Halo! 👋 Saya Asisten Presensi Udinus. Ketik `help` untuk bantuan.")
-
-    elif t in ("/help", "help", "bantuan"):
-        await send_message(
-            "🆘 *Bantuan Presensi Udinus Bot*\n\n"
-            "📅 *Jadwal & Ujian*\n"
-            "`jadwal [hari]` — Jadwal kuliah hari ini/besok/senin\n"
-            "`jadwal gambar` — Screenshot jadwal hari ini (PNG)\n"
-            "`jadwal update` — Sinkron jadwal dari MHS\n"
-            "`ujian` / `ujian pacar` — Jadwal UTS/UAS\n"
-            "`libur` — Daftar hari libur nasional 2026\n\n"
-            "📝 *Tugas & Deadline*\n"
-            "`cek tugas` / `cek tugas pacar` — Tugas Kulino\n"
-            "`deadline` — List deadline tersimpan\n"
-            "`statustugas <nama>` — Tandai tugas selesai\n"
-            "`cleanup` — Hapus deadline yang sudah lewat\n\n"
-            "🤖 *Presensi*\n"
-            "`presensi` / `presensi pacar` — Presensi manual sekarang\n"
-            "`autopilot on/off` — Nyalakan/matikan autopilot\n"
-            "*(autopilot akan jalan otomatis 30 menit sebelum kelas)*\n\n"
-            "📊 *Info*\n"
-            "`status` — Status bot & statistik\n"
-            "`quickstats` / `ringkasan` — Ringkasan cepat\n"
-            "`nilai` / `khs` — Nilai & IP terbaru dari SiAdin\n"
-            "`tanggal` — Tanggal & hari ini\n"
-            "`logbook` — Riwayat presensi\n\n"
-            "🔧 *Settings*\n"
-            "`addalias <nama> <perintah>` — Bikin alias\n"
-            "`delalias <nama>` — Hapus alias\n\n"
-            "💡 *Tips:*\n"
-            "• Pagi jam 07:00 bot kirim reminder jadwal + screenshot otomatis\n"
-            "• Nilai baru terdeteksi otomatis — bot akan notify tanpa diminta!\n"
-            "• Tap ⏰ Snooze 10m di reminder kelas untuk tunda 10 menit\n"
-            "• Kirim `presensi pacar` buat absen akun Azfa\n"
-            "• Kirim `ujian pacar` buat lihat jadwal ujian Azfa\n"
-            "• Dashboard: `http://localhost:8787?token=presensi123`"
-        )
-
-    elif t in ("/status", "status", "stats"):
-        from config import BOT_START_TIME
-
-        uptime = datetime.now() - BOT_START_TIME
-        d, r = uptime.days, uptime.seconds
-        h, m = r // 3600, (r % 3600) // 60
-        cache = load_tasks_deadlines()
-        active = sum(1 for k in cache if k != "notified")
-        snap = get_stats_snapshot()
-        await send_message(
-            f"🤖 *Status*\n"
-            f"⏱ {d}h {h}j {m}m\n"
-            f"📥 {snap['messages_received']} | 📤 {snap['messages_sent']}\n"
-            f"📝 {snap['tugas_checks']} | ✅ {snap['presensi_done']}\n"
-            f"⚠ {snap['errors']} | 📋 {active}\n"
-            f"👥 {len(ALLOWED_CHAT_IDS)} user\n"
-            f"🤖 {'Aktif' if get_autopilot() else 'Nonaktif'}"
-        )
-
-    elif t in ("/tanggal", "tanggal", "kalender"):
-        now = datetime.now()
-        esok = now + timedelta(days=1)
-        await send_message(
-            f"📅 Hari ini: {now.strftime('%A, %d %B %Y')}\n"
-            f"🕐 {now.strftime('%H:%M')} WIB\n"
-            f"🗓 Besok: {esok.strftime('%A, %d %B %Y')}\n\n"
-            f"{get_schedule_for('saya', 'hari ini')}"
-        )
-
-    elif t.startswith("jadwal") and ("update" in t or "refresh" in t or "sinkron" in t):
-        await send_message("⏳ Sinkron jadwal...")
-        ok, msg = await update_schedules_from_mhs()
-        await send_message(f"{'✅' if ok else '❌'} {msg}")
-
-    elif t.startswith("jadwal") and ("gambar" in t or "foto" in t or "image" in t or "screenshot" in t):
-        await send_message("⏳ Render jadwal...")
-        from render import render_jadwal_png
-        arg = t.replace("jadwal", "", 1).replace("gambar", "").replace("foto", "")
-        arg = arg.replace("image", "").replace("screenshot", "").strip()
-        if not arg or arg == "hari ini":
-            day_name = datetime.now().strftime("%A").lower()
-            target_hari = HARI_ID.get(day_name, "")
-        elif arg in HARI_INDONESIA or arg in HARI_ID:
-            target_hari = HARI_ID.get(arg, arg)
+    if not silent:
+        if course_query:
+            await send_message(f"⏳ Cek materi *{course_query}* untuk {account['name']}...")
         else:
-            target_hari = ""
-        if not target_hari:
-            await send_message("Hari tidak dikenali. Coba: `jadwal gambar senin`")
-        else:
-            schedules = load_schedules()
-            async with get_page() as page:
-                ok = await render_jadwal_png(page, schedules, target_hari, SCREENSHOT_JADWAL)
-            if ok and os.path.exists(SCREENSHOT_JADWAL):
-                await send_photo(SCREENSHOT_JADWAL)
-            else:
-                await send_message("❌ Gagal render jadwal.")
-
-    elif t.startswith("jadwal"):
-        arg = t.replace("jadwal", "", 1).strip()
-        for w in ("saya", "pacar"):
-            await send_message(get_schedule_for(w, arg or "hari ini"))
-
-    elif t in ("deadline", "tugas deadline", "list deadline"):
-        cache = load_tasks_deadlines()
-        items = [k for k in cache if k != "notified"]
-        if not items:
-            await send_message("📭 Belum ada deadline.")
-        else:
-            lines = ["📋 *Deadline*\n"]
-            for k in items:
-                d = cache[k]
-                lines.append(f"▪️ *{d['name']}* - {d['deadline_raw']}")
-            await send_message("\n".join(lines))
-
-    elif t.startswith("statustugas") or t.startswith("done"):
-        keyword = t.replace("statustugas", "").replace("done", "").strip()
-        if not keyword:
-            await send_message("Gunakan: `statustugas <nama>`")
-        else:
-            cache = load_tasks_deadlines()
-            found = None
-            for k in list(cache.keys()):
-                if k != "notified" and keyword.lower() in cache[k]["name"].lower():
-                    found = k
-                    break
-            if found:
-                name = cache[found]["name"]
-                del cache[found]
-                for nk in list(cache.get("notified", {}).keys()):
-                    if nk.startswith(found):
-                        del cache["notified"][nk]
-                save_tasks_deadlines(cache)
-                await send_message(f"✅ *{name}* ditandai selesai")
-            else:
-                await send_message(f"❌ `{keyword}` tidak ditemukan")
-
-    elif t in ("cleanup", "bersihkan", "hapus deadline"):
-        removed = cleanup_expired_deadlines()
-        if removed:
-            active = sum(1 for k in load_tasks_deadlines() if k != "notified")
-            await send_message(f"🧹 {removed} dihapus. {active} tersisa.")
-        else:
-            await send_message("🧹 Tidak ada yang expired.")
-
-    elif t in ("quickstats", "quick", "ringkasan", "stats cepat"):
-        snap = get_stats_snapshot()
-        cache = load_tasks_deadlines()
-        now = datetime.now()
-        nearest = []
-        for k, v in cache.items():
-            if k == "notified":
-                continue
-            iso = v.get("deadline_iso")
-            if not iso:
-                continue
-            try:
-                dt = datetime.fromisoformat(iso)
-            except ValueError:
-                continue
-            if dt > now:
-                nearest.append((dt, v.get("name", k), v.get("account", "")))
-        nearest.sort()
-        active_deadline = len(nearest)
-        nearest_lines = []
-        for dt, name, acc in nearest[:3]:
-            jam = int((dt - now).total_seconds() / 3600)
-            nearest_lines.append(f"  • {acc}: {name} ({jam}j)")
-        nearest_text = "\n".join(nearest_lines) if nearest_lines else "  (tidak ada)"
-
-        day_name = now.strftime("%A").lower()
-        hari_id = HARI_ID.get(day_name, "")
-        schedules = load_schedules()
-        total_classes = sum(
-            len(schedules.get(w, {}).get(hari_id, [])) for w in ("saya", "pacar")
-        ) if hari_id else 0
-        today_holiday = get_today_holiday()
-        holiday_text = f"🎉 {today_holiday}" if today_holiday else ""
-
-        msg = (
-            f"📊 *Quick Stats*\n\n"
-            f"🤖 Autopilot: {'Aktif' if get_autopilot() else 'OFF'}\n"
-            f"📅 Hari ini: {total_classes} kelas {holiday_text}\n"
-            f"📋 Deadline: {active_deadline} aktif\n"
-            f"{nearest_text}\n\n"
-            f"📨 Pesan: {snap.get('messages_received', 0)} | "
-            f"✅ Presensi: {snap.get('presensi_done', 0)} | "
-            f"📝 Cek tugas: {snap.get('tugas_checks', 0)}\n"
-            f"⚠ Error: {snap.get('errors', 0)}"
-        )
-        await send_message(msg)
-
-    elif t in ("logbook", "catatan"):
-        if not os.path.exists(LOG_DIR):
-            await send_message("📓 Logbook kosong.")
-        else:
-            files = sorted([f for f in os.listdir(LOG_DIR) if f.endswith(".md")], reverse=True)[:3]
-            if not files:
-                await send_message("📓 Logbook kosong.")
-            else:
-                text = "📓 *Logbook* (3 terakhir):\n\n"
-                for f in files:
-                    p = os.path.join(LOG_DIR, f)
-                    with open(p, encoding="utf-8") as fp:
-                        text += f"📅 {f[:-3]}\n```\n{fp.read()[:500]}\n```\n"
-                await send_message(text)
-
-    elif t.startswith("addalias") or t.startswith("/addalias"):
-        parts = text.split(maxsplit=2)
-        if len(parts) < 3:
-            await send_message("Gunakan: `addalias <nama> <perintah>`")
-        else:
-            name = parts[1]
-            cmd = parts[2]
-            add_alias(name, cmd)
-            await send_message(f"✅ Alias `/{name}` → `{cmd}`")
-
-    elif t.startswith("delalias") or t.startswith("/delalias"):
-        parts = text.split()
-        if len(parts) < 2:
-            await send_message("Gunakan: `delalias <nama>`")
-        else:
-            if remove_alias(parts[1].lower()):
-                await send_message(f"✅ Alias `/{parts[1]}` dihapus.")
-            else:
-                await send_message(f"❌ Alias `{parts[1]}` tidak ditemukan.")
-
-    elif t.startswith("/addchid") or t.startswith("addchid"):
-        parts = text.split()
-        if len(parts) < 2:
-            await send_message("Gunakan: `/addchid <chat_id>`")
-        else:
-            try:
-                new_id = int(parts[1])
-                if new_id in ALLOWED_CHAT_IDS:
-                    await send_message(f"ℹ️ {new_id} sudah ada.")
-                else:
-                    ALLOWED_CHAT_IDS.append(new_id)
-                    save_chat_id(new_id)
-                    await send_message(f"✅ {new_id} ditambahkan!")
-            except ValueError:
-                await send_message("Format salah")
-
-    elif "tugas" in t or "cek tugas" in t:
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        inc_stat("tugas_checks")
-        await send_message("⏳ Cek tugas...")
-        tugas = await login_kulino_and_get_tugas(target)
-        if tugas:
-            rows = [f"{'No':<4} {'Tugas':<40} {'Deadline':<20}"]
-            rows.append("-" * 70)
-            for i, t in enumerate(tugas, 1):
-                rows.append(f"{i:<4} {t.get('name','?')[:38]:<40} {t.get('deadline','?')[:18]:<20}")
-            await send_message(f"📝 *Tugas {KULINO_ACCOUNTS[target]['name']}*\n```\n" + "\n".join(rows) + "\n```")
-            if os.path.exists(SCREENSHOT_TUGAS):
-                await send_photo(SCREENSHOT_TUGAS)
-        else:
-            await send_message("📭 Tidak ada tugas aktif.")
-        await process_and_remind_deadlines(tugas, target, send_message)
-
-    elif t.startswith("cek") and "materi" in t:
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        # Extract course query after command
-        cmd_text = text.replace("cek materi", "", 1).replace("pacar", "").replace("azfa", "").strip()
-        query = cmd_text if cmd_text else ""
-        await check_materials_for(target, course_query=query)
-
-    elif "autopilot" in t:
-        if "nonaktif" in t or "off" in t:
-            set_autopilot(False)
-            await send_message("🤖 Autopilot: NONAKTIF")
-        else:
-            set_autopilot(True)
-            await send_message("🤖 Autopilot: AKTIF")
-
-    elif "presensi" in t or "hadir" in t:
-        today_h = get_today_holiday()
-        if today_h:
-            await send_message(f"📢 Hari ini libur: *{today_h}*.\nTidak perlu presensi.")
-            return
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        ok, msg = await do_presensi_siadin(target)
-        if ok:
-            inc_stat("presensi_done")
-            await send_message(f"✅ Presensi {MHS_ACCOUNTS[target]['name']} berhasil!")
-            await send_photo(SCREENSHOT_PRESENSI)
-        else:
-            await send_message(f"❌ {msg}")
-
-    elif t in ("nilai", "khs", "cek nilai", "daftarnilai", "hasil studi"):
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        account = MHS_ACCOUNTS[target]
-        await send_message(f"⏳ Ambil KHS {account['name']}...")
+            await send_message(f"⏳ Cek semua materi Kulino {account['name']}...")
+    
+    cache = load_material_cache()
+    async with get_page() as page:
         try:
-            async with get_page() as page:
-                await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2000)
-                await page.fill("#username", account["nim"])
-                await page.fill("#password", account["password"])
-                async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
-                    await page.click("button:has-text('Masuk ke SiAdin')")
-                khs = await tb.scrape_khs(page, account)
-            await send_message(format_khs_message(khs, account["name"]))
-            _save_khs_history(target, khs)
-            # Save to cache for diff detection
-            cache = load_nilai_cache()
-            cache[target] = {m["kdmk"]: m for m in khs["matkul"]}
-            save_nilai_cache(cache)
-        except Exception as e:
-            logger.error(f"KHS error: {e}")
-            await send_message(f"❌ Gagal ambil KHS: {e}")
+            await page.goto(KULINO_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+            await page.fill("#inputName", account["nim"])
+            await page.fill("#inputPassword", account["password"])
+            await page.click("button:has-text('Log in')")
+            await page.wait_for_timeout(3000)
+            
+            new_files, found_courses = await check_new_materials(page, account, cache, course_query)
+            save_material_cache(cache)
 
-    elif t.startswith("ujian"):
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        await send_message(f"⏳ Cek jadwal ujian {MHS_ACCOUNTS[target]['name']}...")
-        try:
-            async with get_page() as page:
-                account = MHS_ACCOUNTS[target]
-                await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2000)
-                await page.fill("#username", account["nim"])
-                await page.fill("#password", account["password"])
-                async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
-                    await page.click("button:has-text('Masuk ke SiAdin')")
-                items, _ = await tb.scrape_jadwal_ujian(page, account)
-            if items:
-                lines = [f"📋 *Jadwal Ujian {MHS_ACCOUNTS[target]['name']}*\n"]
-                for i, item in enumerate(items, 1):
-                    lines.append(
-                        f"{i}. *{item.get('matkul', '?')}*\n"
-                        f"   📅 {item.get('hari_tanggal', '?')}\n"
-                        f"   🕐 {item.get('jam', '?')} | 🏫 {item.get('ruang', '-')}\n"
-                        f"   📝 {item.get('ujian', '-')}"
-                    )
-                await send_message("\n\n".join(lines))
-            else:
-                await send_message("📭 Belum ada jadwal ujian.")
-        except Exception as e:
-            logger.error(f"ujian error: {e}")
-            await send_message(f"❌ Gagal cek jadwal ujian: {e}")
-
-    elif t in ("libur", "libur 2026", "hari libur", "tanggal merah"):
-        if not HOLIDAY_CACHE:
-            HOLIDAY_CACHE.update(load_holidays())
-        today_h = get_today_holiday()
-        msg_parts = []
-        if today_h:
-            msg_parts.append(f"📢 *Hari ini LIBUR*\n{today_h}\n")
-
-        now = datetime.now()
-        upcoming = []
-        for date_str in sorted(HOLIDAY_CACHE.keys()):
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            if dt < now:
-                continue
-            name = HOLIDAY_CACHE[date_str]
-            hari_en = dt.strftime("%A").lower()
-            day_name = HARI_INDONESIA.get(HARI_ID.get(hari_en, ""), "?")
-            upcoming.append(f"  {day_name}, {date_str}: {name}")
-
-        msg_parts.append("📅 *Libur 2026 (sisa)*")
-        msg_parts.extend(upcoming[:15])
-        await send_message("\n".join(msg_parts))
-
-    elif t in ("statpresensi", "rekap", "presensi stat", "statpres"):
-        from storage import compute_attendance, attendance_alert
-
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
-        now = datetime.now()
-        year, month = now.year, now.month
-        await send_message(f"⏳ Hitung statistik presensi {MHS_ACCOUNTS[target]['name']}...")
-        schedules = load_schedules()
-        results = compute_attendance(schedules, target, year, month)
-        msg = format_attendance_message(results, MHS_ACCOUNTS[target]["name"], year, month)
-        await send_message(msg)
-        warnings = attendance_alert(results)
-        if warnings:
-            await send_message(
-                "\U000026A0 *Peringatan Kehadiran*\n" + "\n".join(f"  \u2022 {w}" for w in warnings)
-            )
-
-    else:
-        try:
-            from nlp import parse_question, answer_jadwal, answer_presensi
-
-            intent = parse_question(text)
-            if intent["intent"] in ("jadwal", "presensi") and intent["hari"]:
-                schedules = load_schedules()
-                if intent["intent"] == "jadwal":
-                    reply = answer_jadwal(intent, schedules, "saya")
+            if course_query and not found_courses:
+                if not silent:
+                    await send_message(f"❌ Mata kuliah \"{course_query}\" tidak ditemukan untuk {account['name']}.")
+                return
+            
+            if not new_files:
+                if not silent:
+                    if course_query:
+                        await send_message(f"📭 Tidak ada materi baru di *{course_query}* ({account['name']}).")
+                    else:
+                        await send_message(f"📭 Tidak ada materi baru untuk {account['name']}.")
+                return
+                
+            await send_message(f"📚 *Materi Baru ({account['name']})*\nAda {len(new_files)} file baru.")
+            
+            for f in new_files:
+                caption = f"📖 *{f['course_name']}*\n📄 {f['name']}"
+                if "local_path" in f and os.path.exists(f["local_path"]):
+                    ok = await send_document(f["local_path"], caption=caption)
+                    if ok:
+                        os.remove(f["local_path"])
                 else:
-                    reply = answer_presensi(intent, schedules)
-                await send_message(reply)
-            elif intent["intent"] == "deadline":
-                cache = load_tasks_deadlines()
-                items = [v for k, v in cache.items() if k != "notified"]
-                if intent["keyword"]:
-                    items = [i for i in items if intent["keyword"].lower() in i.get("name", "").lower()]
-                if items:
-                    lines = ["📋 Deadline" + (f" (cari: {intent['keyword']})" if intent.get('keyword') else "") + ":"]
-                    for i in items[:10]:
-                        lines.append(f"  • {i.get('name','')} - {i.get('deadline_raw','')}")
-                    await send_message("\n".join(lines))
-                else:
-                    await send_message("📭 Deadline tidak ditemukan.")
-            else:
-                await send_message("Halo! Ketik `help` untuk lihat perintah.")
+                    await send_message(caption + f"\n🔗 Link: {f['file_url']}")
+                    
         except Exception as e:
-            logger.error(f"NLP error: {e}")
-            await send_message("Halo! Ketik `help` untuk lihat perintah.")
+            logger.error(f"Error check materials {account_key}: {e}")
+            await send_message(f"❌ Gagal cek materi: {e}")
 
 
+# handle_command is now imported from handlers; register callbacks in main()
+# Re-export for backward compatibility with tests
+handle_command = handlers.handle_command
 # ============ Main ============
 async def main() -> None:
     global ALLOWED_CHAT_ID, ALLOWED_CHAT_IDS, _polling_backoff
@@ -1079,6 +742,16 @@ async def main() -> None:
     _CFG_IDS.extend(loaded)
     ALLOWED_CHAT_ID = _CFG_IDS[0] if _CFG_IDS else None
     logger.info(f"Chat IDs: {ALLOWED_CHAT_IDS}" if ALLOWED_CHAT_IDS else "Tunggu /addchid dari admin...")
+
+    handlers.register_callbacks(
+        get_autopilot_fn=get_autopilot,
+        set_autopilot_fn=set_autopilot,
+        do_presensi_fn=do_presensi_siadin,
+        login_kulino_fn=login_kulino_and_get_tugas,
+        update_schedules_fn=update_schedules_from_mhs,
+        check_materials_fn=check_materials_for,
+    )
+    logger.info("Handler callbacks registered")
 
     asyncio.create_task(proactive_check())
     logger.info("Proactive loop started")
@@ -1170,7 +843,7 @@ async def main() -> None:
 
                     inc_stat("messages_received")
                     logger.info(f"{chat_id}: {text}")
-                    await handle_command(text, chat_id)
+                    await handlers.handle_command(text, chat_id)
             except Exception as e:
                 inc_stat("errors")
                 logger.error(f"Polling error: {e}")
@@ -1194,50 +867,3 @@ if __name__ == "__main__":
         from tg import close_client
 
         asyncio.run(close_client())
-async def check_materials_for(account_key: str, course_query: str = "") -> None:
-    from scrapers.kulino import check_new_materials
-    account = KULINO_ACCOUNTS[account_key]
-
-    if course_query:
-        await send_message(f"⏳ Cek materi *{course_query}* untuk {account['name']}...")
-    else:
-        await send_message(f"⏳ Cek semua materi Kulino {account['name']}...")
-    
-    cache = load_material_cache()
-    async with get_page() as page:
-        try:
-            await page.goto(KULINO_URL, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(2000)
-            await page.fill("#inputName", account["nim"])
-            await page.fill("#inputPassword", account["password"])
-            await page.click("button:has-text('Log in')")
-            await page.wait_for_timeout(3000)
-            
-            new_files, found_courses = await check_new_materials(page, account, cache, course_query)
-            save_material_cache(cache)
-
-            if course_query and not found_courses:
-                await send_message(f"❌ Mata kuliah \"{course_query}\" tidak ditemukan untuk {account['name']}.")
-                return
-            
-            if not new_files:
-                if course_query:
-                    await send_message(f"📭 Tidak ada materi baru di *{course_query}* ({account['name']}).")
-                else:
-                    await send_message(f"📭 Tidak ada materi baru untuk {account['name']}.")
-                return
-                
-            await send_message(f"📚 *Materi Baru ({account['name']})*\nAda {len(new_files)} file baru.")
-            
-            for f in new_files:
-                caption = f"📖 *{f['course_name']}*\n📄 {f['name']}"
-                if "local_path" in f and os.path.exists(f["local_path"]):
-                    ok = await send_document(f["local_path"], caption=caption)
-                    if ok:
-                        os.remove(f["local_path"])
-                else:
-                    await send_message(caption + f"\n🔗 Link: {f['file_url']}")
-                    
-        except Exception as e:
-            logger.error(f"Error check materials {account_key}: {e}")
-            await send_message(f"❌ Gagal cek materi: {e}")
