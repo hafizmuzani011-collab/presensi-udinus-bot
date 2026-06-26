@@ -16,23 +16,27 @@ import scrapers as tb
 from scrapers import format_khs_message
 from browser import close_browser, get_page
 from config import (
-    ADMIN_CHAT_ID, KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, NAMA_PACAR, NAMA_SAYA, STATS_FILE, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
-    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, save_stats, inc_stat,
-)
+    ADMIN_CHAT_ID, KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, STATS_FILE, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
+    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, asave_stats, inc_stat,
+    get_control, set_control, consume_control,
+)   
 from constants import (
     BROWSER_NAV_TIMEOUT, BROWSER_NETWORK_IDLE_TIMEOUT, BROWSER_SETTLE_MS,
     HARI_ID, HARI_INDONESIA, POLLING_BACKOFF_MAX_SECONDS, PROACTIVE_INTERVAL_SECONDS,
     SNOOZE_DURATION_SECONDS,
 )
 from storage import (
-    load_chat_ids, load_nilai_cache, load_offset, load_presensi_done,
-    load_schedules, run_backup, save_chat_id, save_nilai_cache,
-    save_offset, save_presensi_done, write_logbook, diff_nilai,
-    load_khs_history, save_khs_history,
+    aload_chat_ids, asave_chat_id, aload_offset, asave_offset,
+    aload_presensi_done, asave_presensi_done, aload_schedules,
+    aload_tasks_deadlines, asave_tasks_deadlines, acleanup_expired_deadlines,
+    aload_nilai_cache, asave_nilai_cache, awrite_logbook, diff_nilai,
+    aload_khs_history, asave_khs_history, aload_material_cache, asave_material_cache,
+    aload_state, asave_state, run_backup,
 )
-from tg import answer_callback, get_updates, make_inline_keyboard, send_message, send_photo, send_document
+from tg import answer_callback, delete_webhook, get_updates, make_inline_keyboard, send_message, send_photo, send_document
 from utils import process_and_remind_deadlines
-from storage import load_material_cache, save_material_cache
+from calendar_sync import sync_gcal_schedule
+from toast import send_toast
 import handlers
 
 # Load saved stats
@@ -76,37 +80,6 @@ def get_today_holiday() -> str | None:
     return is_holiday(datetime.now().strftime("%Y-%m-%d"))
 
 
-# Dashboard control (shared with web dashboard) - circular safe
-# Use fallbacks if web_dashboard can't be imported (e.g. import error).
-DASH_CONTROL: dict = {"autopilot": True, "trigger_tugas": 0, "trigger_presensi": 0}
-
-
-def get_control(key, default=None):
-    return DASH_CONTROL.get(key, default)
-
-
-def set_control(key, value):
-    DASH_CONTROL[key] = value
-
-
-def consume_control(key, default=None):
-    val = DASH_CONTROL.get(key, default)
-    DASH_CONTROL[key] = default if default is not None else ""
-    return val
-
-
-try:
-    from web_dashboard import (  # type: ignore[import-not-found]
-        CONTROL as _REAL_CONTROL,
-        get_control as _real_get_control,
-    )
-    from web_dashboard import consume_control as _real_consume_control  # type: ignore[import-not-found]
-    DASH_CONTROL = _REAL_CONTROL
-    get_control = _real_get_control  # type: ignore[assignment]
-    consume_control = _real_consume_control  # type: ignore[assignment]
-except Exception:
-    pass
-
 # Setup logging dengan rotation (max 10MB per file, 5 backups = 50MB total)
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 logging.basicConfig(
@@ -149,14 +122,14 @@ def _detect_semester() -> str:
     return f"{year}/{year+1} Ganjil"
 
 
-def _save_khs_history(who: str, khs: dict) -> None:
+async def _save_khs_history(who: str, khs: dict) -> None:
     """Simpan riwayat IP/IPK per semester."""
     ips = khs.get("ip_semester")
     ipk = khs.get("ipk")
     total_sks = khs.get("total_sks", 0)
     if ips is None and ipk is None:
         return
-    history = load_khs_history()
+    history = await aload_khs_history()
     semester = _detect_semester()
     entry = history.setdefault(who, {}).setdefault(semester, {})
     if ips is not None:
@@ -165,7 +138,7 @@ def _save_khs_history(who: str, khs: dict) -> None:
         entry["ipk"] = ipk
     if total_sks:
         entry["total_sks"] = total_sks
-    save_khs_history(history)
+    await asave_khs_history(history)
     logger.info(f"KHS history saved: {who} {semester} IP={ips} IPK={ipk}")
 
 
@@ -280,10 +253,10 @@ _reminder_sent: set[str] = set()
 _snoozed_reminders: dict[str, float] = {}
 
 
-def _load_presensi_done_for_today(today_str: str) -> set:
+async def _load_presensi_done_for_today(today_str: str) -> set:
     """Load presensi_done keys. Reset kalau tanggal ganti (hari baru)."""
     global _presensi_done, _presensi_done_date
-    data = load_presensi_done()
+    data = await aload_presensi_done()
     if data.get("date") != today_str:
         _presensi_done = set()
         _presensi_done_date = today_str
@@ -293,15 +266,16 @@ def _load_presensi_done_for_today(today_str: str) -> set:
     return _presensi_done
 
 
-def _save_presensi_done(today_str: str) -> None:
+async def _save_presensi_done(today_str: str) -> None:
     """Persist ke file."""
-    save_presensi_done(today_str, _presensi_done)
+    await asave_presensi_done(today_str, _presensi_done)
 
 
 # ============ Proactive Loop Helpers ============
 async def _handle_dashboard_triggers() -> None:
     trigger_tugas_count = int(consume_control("trigger_tugas", 0) or 0)
     if trigger_tugas_count > 0:
+        send_toast("🔍 Cek Tugas", f"Triggered dari dashboard... ({trigger_tugas_count}x)")
         await send_message(f"🔔 Trigger dari dashboard: cek tugas ({trigger_tugas_count}x)...")
         for key in KULINO_ACCOUNTS:
             nama = KULINO_ACCOUNTS[key]["name"]
@@ -322,8 +296,9 @@ async def _handle_dashboard_triggers() -> None:
                     await send_photo(SCREENSHOT_TUGAS)
 
     trigger_presensi_who = consume_control("trigger_presensi", "")
-    if trigger_presensi_who in ("saya", "pacar"):
+    if trigger_presensi_who in MHS_ACCOUNTS:
         nama = MHS_ACCOUNTS[trigger_presensi_who]["name"]
+        send_toast("👤 Presensi", f"Triggered manual presensi {nama} dari dashboard...")
         await send_message(f"🔔 Trigger dari dashboard: presensi {nama}...")
         ok, msg = await do_presensi_siadin(trigger_presensi_who)
         if ok:
@@ -337,14 +312,22 @@ async def _auto_sync_schedules(day_name: str, hour: int, minute: int) -> None:
     if day_name == "sunday" and hour == 22 and minute < 2:
         logger.info("Auto-sync jadwal mingguan...")
         ok, msg = await update_schedules_from_mhs()
-        logger.info(f"Auto-sync jadwal: {msg}")
-        await send_message(f"🔄 Auto-sync jadwal mingguan:\n{msg}")
+        logger.info(f"Auto-sync jadwal MHS: {msg}")
+        await send_message(f"🔄 Auto-sync jadwal mingguan (MHS):\n{msg}")
+
+        # Auto-sync from Google Calendar
+        for who in MHS_ACCOUNTS:
+            gcal_ok, gcal_msg = await sync_gcal_schedule(who)
+            if gcal_ok:
+                logger.info(f"Auto-sync GCal {who}: {gcal_msg}")
+                await send_message(f"🔄 Auto-sync Google Calendar {MHS_ACCOUNTS[who]['name']}:\n{gcal_msg}")
 
 
 async def _check_daily_tugas(hour: int, minute: int, today_str: str) -> None:
     global _tugas_checked_today
     if hour == 17 and minute < 2 and _tugas_checked_today != today_str:
         _tugas_checked_today = today_str
+        send_toast("📝 Cek Tugas", "17:00 - Cek tugas otomatis...")
         await send_message("⏰ 17:00 - Cek tugas otomatis...")
         for key in KULINO_ACCOUNTS:
             tugas = await login_kulino_and_get_tugas(key)
@@ -372,11 +355,9 @@ async def _check_class_reminders(hour: int, minute: int, hari_id: str) -> None:
     global _reminder_sent
     if not hari_id:
         return
-    schedules = load_schedules()
+    schedules = await aload_schedules()
     now_min = hour * 60 + minute
-    for who in ("saya", "pacar"):
-        if who not in MHS_ACCOUNTS:
-            continue
+    for who in MHS_ACCOUNTS:
         today_sched = schedules.get(who, {}).get(hari_id, [])
         for jam, mk, ruang in today_sched:
             parts = jam.split("-")
@@ -393,7 +374,13 @@ async def _check_class_reminders(hour: int, minute: int, hari_id: str) -> None:
                 if reminder_key in _reminder_sent:
                     continue
                 _reminder_sent.add(reminder_key)
+                await asave_state({
+                    "reminder_sent": list(_reminder_sent),
+                    "snoozed": _snoozed_reminders,
+                    "morning_reminder_date": _morning_reminder_date,
+                })
                 nama = MHS_ACCOUNTS[who]["name"]
+                send_toast(f"⏰ {mk} ({ruang})", f"Kelas dimulai 30 menit lagi — {nama}")
                 buttons = [
                     [{"text": "✅ Presensi", "callback_data": "presensi:hadir:" + who}],
                     [{"text": "⏰ Snooze 10m", "callback_data": f"snooze:{who}:{hari_id}:{jam_mulai}"}],
@@ -416,7 +403,7 @@ async def _check_snoozed_reminders(hari_id: str) -> None:
     if not _snoozed_reminders or not hari_id:
         return
     now_ts = time.time()
-    schedules = load_schedules()
+    schedules = await aload_schedules()
     expired = [k for k, exp in _snoozed_reminders.items() if exp <= now_ts]
     for key in expired:
         # key format: "snoozed:{who}:{hari_id}:{jam_mulai}"
@@ -458,13 +445,11 @@ async def _check_nilai_update(minute: int) -> None:
     """Cek nilai baru setiap 30 menit (minute 0 & 30)."""
     if minute not in (0, 30):
         return
-    cache = load_nilai_cache()
+    cache = await aload_nilai_cache()
     if not cache:
         logger.info("Nilai cache kosong, skip auto-check")
         return
-    for who in ("saya", "pacar"):
-        if who not in MHS_ACCOUNTS:
-            continue
+    for who in MHS_ACCOUNTS:
         cached_courses = cache.get(who, {})
         if not cached_courses:
             continue
@@ -482,6 +467,7 @@ async def _check_nilai_update(minute: int) -> None:
             _save_khs_history(who, khs)
             diff = diff_nilai({who: cached_courses}, {who: new_map})
             if diff:
+                send_toast("🔔 Nilai Baru", f"Cek SiAdin {account['name']} — Ada update nilai")
                 lines = [f"🔔 *Nilai Baru!* ({account['name']})"]
                 for d in diff:
                     lines.append(f"  • {d['matkul']}: {d['old']} → *{d['new']}*")
@@ -490,7 +476,7 @@ async def _check_nilai_update(minute: int) -> None:
                 await send_message("\n".join(lines))
                 await send_message(format_khs_message(khs, account["name"]))
             cache[who] = new_map
-            save_nilai_cache(cache)
+            await asave_nilai_cache(cache)
         except Exception as e:
             logger.error(f"Nilai check {who}: {e}")
 
@@ -502,10 +488,8 @@ async def _check_attendance_alerts(hour: int, minute: int, hari_id: str) -> None
     from storage import compute_attendance, attendance_alert
 
     now = datetime.now()
-    for who in ("saya", "pacar"):
-        if who not in MHS_ACCOUNTS:
-            continue
-        schedules = load_schedules()
+    for who in MHS_ACCOUNTS:
+        schedules = await aload_schedules()
         results = compute_attendance(schedules, who, now.year, now.month)
         warnings = attendance_alert(results)
         if warnings:
@@ -521,10 +505,8 @@ async def _run_autopilot_presensi(
     autopilot_on = get_autopilot()
     if not (autopilot_on and hari_id and not today_holiday):
         return
-    schedules = load_schedules()
-    for who in ("saya", "pacar"):
-        if who not in MHS_ACCOUNTS:
-            continue
+    schedules = await aload_schedules()
+    for who in MHS_ACCOUNTS:
         today_sched = schedules.get(who, {}).get(hari_id, [])
         for jam, mk, ruang in today_sched:
             parts = jam.split("-")
@@ -546,7 +528,7 @@ async def _run_autopilot_presensi(
             if start_min <= now_min < end_min:
                 async with _presensi_done_lock:
                     _presensi_done.add(sesi_key)
-                    _save_presensi_done(today_str)
+                    await _save_presensi_done(today_str)
                 # Clear any snoozed reminders for this sesi
                 snooze_key = f"snoozed:{who}:{hari_id}:{jam_mulai}"
                 _snoozed_reminders.pop(snooze_key, None)
@@ -554,16 +536,18 @@ async def _run_autopilot_presensi(
                 await send_message(f"🤖 Presensi {MHS_ACCOUNTS[who]['name']} - {mk} {jam}")
                 ok, msg = await do_presensi_siadin(who)
                 if ok:
+                    send_toast(f"✅ Presensi {MHS_ACCOUNTS[who]['name']}", f"{mk} {jam} — {ruang}")
                     await send_message(
                         f"✅ Presensi {MHS_ACCOUNTS[who]['name']} berhasil!"
                         f"\n📖 {mk}\n🕐 {jam}\n🏫 {ruang}"
                     )
                     await send_photo(SCREENSHOT_PRESENSI)
                     try:
-                        write_logbook(now.strftime("%Y-%m-%d"), who, jam, mk, ruang, "hadir")
+                        await awrite_logbook(now.strftime("%Y-%m-%d"), who, jam, mk, ruang, "hadir")
                     except Exception as e:
                         logger.error(f"Logbook error: {e}")
                 else:
+                    send_toast(f"⚠️ Presensi {MHS_ACCOUNTS[who]['name']} Gagal", f"{mk} — {msg}")
                     await send_message(f"⚠️ Presensi {MHS_ACCOUNTS[who]['name']} gagal: {msg}")
 
 
@@ -576,22 +560,23 @@ async def _check_morning_reminder(
         return
     if not hari_id or today_holiday:
         return
-    schedules = load_schedules()
-    total = sum(len(schedules.get(w, {}).get(hari_id, [])) for w in ("saya", "pacar"))
+    schedules = await aload_schedules()
+    total = sum(len(schedules.get(w, {}).get(hari_id, [])) for w in MHS_ACCOUNTS.keys())
     if total == 0:
         return
 
     _morning_reminder_date = today_str
+    send_toast("☀️ Selamat Pagi", f"Hari ini ada {total} kelas.")
     header = (
         f"☀️ *Selamat pagi!*\n\n"
         f"📅 Jadwal hari ini ({HARI_INDONESIA.get(hari_id, hari_id)}):\n"
     )
-    for who in ("saya", "pacar"):
-        nama = NAMA_SAYA if who == "saya" else NAMA_PACAR
+    for who in MHS_ACCOUNTS:
+        nama = MHS_ACCOUNTS[who]["name"]
         slots = schedules.get(who, {}).get(hari_id, [])
         if not slots:
             continue
-        header += f"\n👤 *{nama}* ({total} kelas):\n"
+        header += f"\n👤 *{nama}* ({len(slots)} kelas):\n"
         for jam, mk, ruang in slots:
             header += f"  🕐 {jam} — {mk} ({ruang})\n"
     header += "\n_Autopilot akan jalan otomatis. Selamat kuliah!_"
@@ -617,7 +602,7 @@ async def proactive_check() -> None:
             day_name = now.strftime("%A").lower()
             hari_id = HARI_ID.get(day_name, "")
 
-            _load_presensi_done_for_today(today_str)
+            await _load_presensi_done_for_today(today_str)
 
             await _handle_dashboard_triggers()
             await _auto_sync_schedules(day_name, hour, minute)
@@ -631,12 +616,19 @@ async def proactive_check() -> None:
             
             # Cek materi tiap jam (pada menit ke-15)
             if minute == 15:
-                for target in ("saya", "pacar"):
+                for target in KULINO_ACCOUNTS:
                     await check_materials_for(target, silent=True)
 
             today_holiday = get_today_holiday()
             await _check_morning_reminder(hour, minute, hari_id, today_holiday, today_str)
             await _run_autopilot_presensi(now, hour, minute, hari_id, today_holiday, today_str)
+
+            # Persist volatile state
+            await asave_state({
+                "reminder_sent": list(_reminder_sent),
+                "snoozed": _snoozed_reminders,
+                "morning_reminder_date": _morning_reminder_date,
+            })
 
             await asyncio.sleep(PROACTIVE_INTERVAL_SECONDS)
         except Exception as e:
@@ -659,18 +651,21 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
         else:
             await send_message(f"⏳ Cek semua materi Kulino {account['name']}...")
     
-    cache = load_material_cache()
-    async with get_page() as page:
+    cache = await aload_material_cache()
+    async with get_page(".browser_state/kulino_" + account_key + ".json") as page:
         try:
             await page.goto(KULINO_URL, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2000)
-            await page.fill("#inputName", account["nim"])
-            await page.fill("#inputPassword", account["password"])
-            await page.click("button:has-text('Log in')")
-            await page.wait_for_timeout(3000)
+            if await page.query_selector("#inputName"):
+                await page.fill("#inputName", account["nim"])
+                await page.fill("#inputPassword", account["password"])
+                await page.click("button:has-text('Log in')")
+                await page.wait_for_timeout(3000)
+            else:
+                logger.info(f"Kulino: already logged in for {account['nim']}")
             
             new_files, found_courses = await check_new_materials(page, account, cache, course_query)
-            save_material_cache(cache)
+            await asave_material_cache(cache)
 
             if course_query and not found_courses:
                 if not silent:
@@ -715,6 +710,15 @@ async def main() -> None:
         logger.error("Instance lain sedang berjalan")
         sys.exit(1)
 
+    await delete_webhook()
+
+    # Restore volatile state
+    state = await aload_state()
+    global _reminder_sent, _snoozed_reminders, _morning_reminder_date
+    _reminder_sent = set(state.get("reminder_sent", []))
+    _snoozed_reminders = state.get("snoozed", {})
+    _morning_reminder_date = state.get("morning_reminder_date")
+
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
@@ -731,11 +735,11 @@ async def main() -> None:
     # Load chat IDs
     from config import ALLOWED_CHAT_IDS as _CFG_IDS
 
-    loaded = load_chat_ids()
+    loaded = await aload_chat_ids()
     # Bootstrap with ADMIN_CHAT_ID if set
     if ADMIN_CHAT_ID and ADMIN_CHAT_ID not in loaded:
         loaded.append(ADMIN_CHAT_ID)
-        save_chat_id(ADMIN_CHAT_ID)
+        await asave_chat_id(ADMIN_CHAT_ID)
 
     ALLOWED_CHAT_IDS = loaded
     _CFG_IDS.clear()
@@ -750,11 +754,16 @@ async def main() -> None:
         login_kulino_fn=login_kulino_and_get_tugas,
         update_schedules_fn=update_schedules_from_mhs,
         check_materials_fn=check_materials_for,
+        syncgcal_fn=sync_gcal_schedule,
     )
     logger.info("Handler callbacks registered")
 
     asyncio.create_task(proactive_check())
     logger.info("Proactive loop started")
+
+    # Sync GCal on startup in background
+    for target_who in MHS_ACCOUNTS:
+        asyncio.create_task(sync_gcal_schedule(target_who))
 
     if os.environ.get("DASHBOARD_DISABLE", "0") != "1":
         try:
@@ -767,7 +776,7 @@ async def main() -> None:
     else:
         logger.info("Web dashboard DISABLED")
 
-    offset = load_offset()
+    offset = await aload_offset()
     try:
         while True:
             if shutdown_event.is_set():
@@ -778,7 +787,7 @@ async def main() -> None:
                 _polling_backoff = 1.0
                 for update in updates:
                     offset = update["update_id"] + 1
-                    save_offset(offset)
+                    await asave_offset(offset)
 
                     if "callback_query" in update:
                         cb = update["callback_query"]
@@ -795,6 +804,11 @@ async def main() -> None:
                                 if who in MHS_ACCOUNTS:
                                     key = f"snoozed:{who}:{key_hari}:{jam_mulai}"
                                     _snoozed_reminders[key] = time.time() + SNOOZE_DURATION_SECONDS
+                                    await asave_state({
+                                        "reminder_sent": list(_reminder_sent),
+                                        "snoozed": _snoozed_reminders,
+                                        "morning_reminder_date": _morning_reminder_date,
+                                    })
                                     logger.info(f"Snooze set: {key} until {_snoozed_reminders[key]:.0f}")
                                     nama = MHS_ACCOUNTS[who]["name"]
                                     await answer_callback(cb_id, f"⏰ Akan diingatkan 10 menit lagi ({nama})")
@@ -817,6 +831,11 @@ async def main() -> None:
                                     await send_photo(SCREENSHOT_PRESENSI)
                                 else:
                                     await send_message(f"⚠️ Presensi gagal: {msg}")
+                        elif cb_data.startswith("cmd:"):
+                            from tg import edit_message
+                            cmd = cb_data.split(":", 1)[-1]
+                            await edit_message(cb_chat_id, cb.get("message", {}).get("message_id"), f"⏳ Menjalankan /{cmd}...")
+                            await handlers.handle_command(f"/{cmd}", cb_chat_id)
                         continue
 
                     msg = update.get("message", {})
@@ -828,7 +847,7 @@ async def main() -> None:
                         continue
                     if not ALLOWED_CHAT_IDS:
                         if ADMIN_CHAT_ID and chat_id == ADMIN_CHAT_ID:
-                            save_chat_id(chat_id)
+                            await asave_chat_id(chat_id)
                             ALLOWED_CHAT_IDS = [chat_id]
                             ALLOWED_CHAT_ID = chat_id
                             from config import ALLOWED_CHAT_IDS as __C
