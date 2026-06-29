@@ -1,5 +1,7 @@
-"""Presensi Udinus Bot - Main entry point.
-Dependencies: config.py, storage.py, utils.py, tg.py, telegram_bot.py, instance_lock.py
+"""Telegram bot — main polling loop and webhook integration.
+
+Handles bot lifecycle, updates processing, and scheduled tasks like
+daily reminders and autopilot checks.
 """
 import asyncio
 import json
@@ -17,9 +19,9 @@ from scrapers import format_khs_message
 from browser import close_browser, get_page
 from config import (
     ADMIN_CHAT_ID, KULINO_ACCOUNTS, MHS_ACCOUNTS, KULINO_URL, LOG_FILE, STATS_FILE, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
-    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, asave_stats, inc_stat,
+    SCREENSHOT_TUGAS, SCHEDULES_FILE, BOT_TOKEN, inc_stat, save_stats,
     get_control, set_control, consume_control,
-)   
+)
 from constants import (
     BROWSER_NAV_TIMEOUT, BROWSER_NETWORK_IDLE_TIMEOUT, BROWSER_SETTLE_MS,
     HARI_ID, HARI_INDONESIA, POLLING_BACKOFF_MAX_SECONDS, PROACTIVE_INTERVAL_SECONDS,
@@ -28,7 +30,6 @@ from constants import (
 from storage import (
     aload_chat_ids, asave_chat_id, aload_offset, asave_offset,
     aload_presensi_done, asave_presensi_done, aload_schedules,
-    aload_tasks_deadlines, asave_tasks_deadlines, acleanup_expired_deadlines,
     aload_nilai_cache, asave_nilai_cache, awrite_logbook, diff_nilai,
     aload_khs_history, asave_khs_history, aload_material_cache, asave_material_cache,
     aload_state, asave_state, run_backup,
@@ -82,9 +83,13 @@ def get_today_holiday() -> str | None:
 
 # Setup logging dengan rotation (max 10MB per file, 5 backups = 50MB total)
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+LOG_FORMAT_JSON = '{"time":"%(asctime)s","name":"%(name)s","level":"%(levelname)s","msg":"%(message)s"}'
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format=LOG_FORMAT,
     handlers=[
         logging.handlers.RotatingFileHandler(
             LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
@@ -92,11 +97,19 @@ logging.basicConfig(
         logging.StreamHandler(),
     ],
 )
+
+# Also write structured JSON log file for parsing/monitoring
+_json_log = logging.handlers.RotatingFileHandler(
+    LOG_FILE + ".json", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_json_log.setFormatter(logging.Formatter(LOG_FORMAT_JSON))
+logging.getLogger().addHandler(_json_log)
+
 logger = logging.getLogger(__name__)
 
 # Bot state
 ALLOWED_CHAT_ID = None
-ALLOWED_CHAT_IDS = []
+ALLOWED_CHAT_IDS: set[int] = set()
 _polling_backoff = 1.0
 
 
@@ -118,7 +131,7 @@ def _detect_semester() -> str:
     year = now.year
     month = now.month
     if month <= 6:
-        return f"{year-1}/{year} Genap" if month >= 2 else f"{year-1}/{year} Ganjil"
+        return f"{year-1}/{year} Genap"
     return f"{year}/{year+1} Ganjil"
 
 
@@ -192,14 +205,14 @@ async def do_presensi_siadin(account_key: str) -> tuple[bool, str]:
     account = MHS_ACCOUNTS[account_key]
     max_retries = 3
     last_msg = ""
-    
+
     # Hapus screenshot lama sebelum presensi
     if os.path.exists(SCREENSHOT_PRESENSI):
         try:
             os.remove(SCREENSHOT_PRESENSI)
         except OSError:
             pass
-    
+
     for attempt in range(1, max_retries + 1):
         if attempt == 1:
             await send_message(f"🤖 Autopilot {account['name']} - presensi dimulai...")
@@ -217,10 +230,10 @@ async def do_presensi_siadin(account_key: str) -> tuple[bool, str]:
             except Exception as e:
                 logger.error(f"Error presensi {account_key} (percobaan {attempt}): {e}")
                 last_msg = str(e)
-                
+
         if attempt < max_retries:
             await asyncio.sleep(5)  # Backoff sebentar sebelum retry
-            
+
     return False, f"Gagal setelah {max_retries} percobaan. Error terakhir: {last_msg}"
 
 
@@ -446,13 +459,13 @@ async def _check_nilai_update(minute: int) -> None:
     if minute not in (0, 30):
         return
     cache = await aload_nilai_cache()
-    if not cache:
-        logger.info("Nilai cache kosong, skip auto-check")
-        return
+    if cache is None:
+        cache = {}
+
     for who in MHS_ACCOUNTS:
         cached_courses = cache.get(who, {})
-        if not cached_courses:
-            continue
+        is_initial = not bool(cached_courses)
+
         try:
             async with get_page() as page:
                 account = MHS_ACCOUNTS[who]
@@ -464,17 +477,20 @@ async def _check_nilai_update(minute: int) -> None:
                     await page.click("button:has-text('Masuk ke SiAdin')")
                 khs = await tb.scrape_khs(page, account)
             new_map = {m["kdmk"]: m for m in khs["matkul"]}
-            _save_khs_history(who, khs)
-            diff = diff_nilai({who: cached_courses}, {who: new_map})
-            if diff:
-                send_toast("🔔 Nilai Baru", f"Cek SiAdin {account['name']} — Ada update nilai")
-                lines = [f"🔔 *Nilai Baru!* ({account['name']})"]
-                for d in diff:
-                    lines.append(f"  • {d['matkul']}: {d['old']} → *{d['new']}*")
-                if khs.get("ip_semester") is not None:
-                    lines.append(f"\n  📊 IP: {khs['ip_semester']}")
-                await send_message("\n".join(lines))
-                await send_message(format_khs_message(khs, account["name"]))
+            await _save_khs_history(who, khs)
+
+            if not is_initial:
+                diff = diff_nilai({who: cached_courses}, {who: new_map})
+                if diff:
+                    send_toast("🔔 Nilai Baru", f"Cek SiAdin {account['name']} — Ada update nilai")
+                    lines = [f"🔔 *Nilai Baru!* ({account['name']})"]
+                    for d in diff:
+                        lines.append(f"  • {d['matkul']}: {d['old']} → *{d['new']}*")
+                    if khs.get("ip_semester") is not None:
+                        lines.append(f"\n  📊 IP: {khs['ip_semester']}")
+                    await send_message("\n".join(lines))
+                    await send_message(format_khs_message(khs, account["name"]))
+
             cache[who] = new_map
             await asave_nilai_cache(cache)
         except Exception as e:
@@ -567,10 +583,17 @@ async def _check_morning_reminder(
 
     _morning_reminder_date = today_str
     send_toast("☀️ Selamat Pagi", f"Hari ini ada {total} kelas.")
+
+    from utils import get_weather_info
+    weather_text = await get_weather_info()
+
     header = (
-        f"☀️ *Selamat pagi!*\n\n"
-        f"📅 Jadwal hari ini ({HARI_INDONESIA.get(hari_id, hari_id)}):\n"
+        "☀️ *Selamat pagi!*\n\n"
     )
+    if weather_text:
+        header += f"{weather_text}\n"
+
+    header += f"📅 Jadwal hari ini ({HARI_INDONESIA.get(hari_id, hari_id)}):\n"
     for who in MHS_ACCOUNTS:
         nama = MHS_ACCOUNTS[who]["name"]
         slots = schedules.get(who, {}).get(hari_id, [])
@@ -613,9 +636,9 @@ async def proactive_check() -> None:
             await _check_snoozed_reminders(hari_id)
             await _check_nilai_update(minute)
             await _check_attendance_alerts(hour, minute, hari_id)
-            
+
             # Cek materi tiap jam (pada menit ke-15)
-            if minute == 15:
+            if minute == 15 and hari_id:
                 for target in KULINO_ACCOUNTS:
                     await check_materials_for(target, silent=True)
 
@@ -650,7 +673,7 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
             await send_message(f"⏳ Cek materi *{course_query}* untuk {account['name']}...")
         else:
             await send_message(f"⏳ Cek semua materi Kulino {account['name']}...")
-    
+
     cache = await aload_material_cache()
     async with get_page(".browser_state/kulino_" + account_key + ".json") as page:
         try:
@@ -663,7 +686,7 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
                 await page.wait_for_timeout(3000)
             else:
                 logger.info(f"Kulino: already logged in for {account['nim']}")
-            
+
             new_files, found_courses = await check_new_materials(page, account, cache, course_query)
             await asave_material_cache(cache)
 
@@ -671,7 +694,7 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
                 if not silent:
                     await send_message(f"❌ Mata kuliah \"{course_query}\" tidak ditemukan untuk {account['name']}.")
                 return
-            
+
             if not new_files:
                 if not silent:
                     if course_query:
@@ -679,9 +702,9 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
                     else:
                         await send_message(f"📭 Tidak ada materi baru untuk {account['name']}.")
                 return
-                
+
             await send_message(f"📚 *Materi Baru ({account['name']})*\nAda {len(new_files)} file baru.")
-            
+
             for f in new_files:
                 caption = f"📖 *{f['course_name']}*\n📄 {f['name']}"
                 if "local_path" in f and os.path.exists(f["local_path"]):
@@ -690,7 +713,7 @@ async def check_materials_for(account_key: str, course_query: str = "", silent: 
                         os.remove(f["local_path"])
                 else:
                     await send_message(caption + f"\n🔗 Link: {f['file_url']}")
-                    
+
         except Exception as e:
             logger.error(f"Error check materials {account_key}: {e}")
             await send_message(f"❌ Gagal cek materi: {e}")
@@ -741,10 +764,10 @@ async def main() -> None:
         loaded.append(ADMIN_CHAT_ID)
         await asave_chat_id(ADMIN_CHAT_ID)
 
-    ALLOWED_CHAT_IDS = loaded
+    ALLOWED_CHAT_IDS = set(loaded)
     _CFG_IDS.clear()
-    _CFG_IDS.extend(loaded)
-    ALLOWED_CHAT_ID = _CFG_IDS[0] if _CFG_IDS else None
+    _CFG_IDS.update(loaded)
+    ALLOWED_CHAT_ID = next(iter(_CFG_IDS), None)
     logger.info(f"Chat IDs: {ALLOWED_CHAT_IDS}" if ALLOWED_CHAT_IDS else "Tunggu /addchid dari admin...")
 
     handlers.register_callbacks(
@@ -801,19 +824,22 @@ async def main() -> None:
                             parts = cb_data.split(":")
                             if len(parts) >= 4:
                                 who, key_hari, jam_mulai = parts[1], parts[2], parts[3]
-                                if who in MHS_ACCOUNTS:
-                                    key = f"snoozed:{who}:{key_hari}:{jam_mulai}"
-                                    _snoozed_reminders[key] = time.time() + SNOOZE_DURATION_SECONDS
-                                    await asave_state({
-                                        "reminder_sent": list(_reminder_sent),
-                                        "snoozed": _snoozed_reminders,
-                                        "morning_reminder_date": _morning_reminder_date,
-                                    })
-                                    logger.info(f"Snooze set: {key} until {_snoozed_reminders[key]:.0f}")
-                                    nama = MHS_ACCOUNTS[who]["name"]
-                                    await answer_callback(cb_id, f"⏰ Akan diingatkan 10 menit lagi ({nama})")
-                                else:
+                                if who not in MHS_ACCOUNTS:
                                     await answer_callback(cb_id, "❌ Akun tidak dikenal")
+                                    continue
+                                key = f"snoozed:{who}:{key_hari}:{jam_mulai}"
+                                if len(cb_data.encode()) > 64:
+                                    await answer_callback(cb_id, "❌ Data terlalu panjang")
+                                    continue
+                                _snoozed_reminders[key] = time.time() + SNOOZE_DURATION_SECONDS
+                                await asave_state({
+                                    "reminder_sent": list(_reminder_sent),
+                                    "snoozed": _snoozed_reminders,
+                                    "morning_reminder_date": _morning_reminder_date,
+                                })
+                                logger.info(f"Snooze set: {key} until {_snoozed_reminders[key]:.0f}")
+                                nama = MHS_ACCOUNTS[who]["name"]
+                                await answer_callback(cb_id, f"⏰ Akan diingatkan 10 menit lagi ({nama})")
                             else:
                                 await answer_callback(cb_id, "❌ Format snooze salah")
                         elif cb_data.startswith("presensi:hadir:"):
@@ -848,12 +874,12 @@ async def main() -> None:
                     if not ALLOWED_CHAT_IDS:
                         if ADMIN_CHAT_ID and chat_id == ADMIN_CHAT_ID:
                             await asave_chat_id(chat_id)
-                            ALLOWED_CHAT_IDS = [chat_id]
+                            ALLOWED_CHAT_IDS = {chat_id}
                             ALLOWED_CHAT_ID = chat_id
                             from config import ALLOWED_CHAT_IDS as __C
 
                             __C.clear()
-                            __C.append(chat_id)
+                            __C.add(chat_id)
                         else:
                             logger.info(f"Ditolak: {chat_id} (belum terdaftar, ADMIN_CHAT_ID={ADMIN_CHAT_ID})")
                             continue
@@ -861,7 +887,9 @@ async def main() -> None:
                         continue
 
                     inc_stat("messages_received")
-                    logger.info(f"{chat_id}: {text}")
+                    # Sanitize sensitive info in logs (no passwords in register messages)
+                    log_text = text if not text.lower().startswith("/register") else text.split()[0]
+                    logger.info(f"{chat_id}: {log_text}")
                     await handlers.handle_command(text, chat_id)
             except Exception as e:
                 inc_stat("errors")

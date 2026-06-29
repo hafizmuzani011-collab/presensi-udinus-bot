@@ -11,8 +11,15 @@ import re
 from datetime import datetime, timedelta
 
 from constants import HARI_MAP, KATA_HARI
+from config import MHS_ACCOUNTS
 
 HARI = HARI_MAP  # full mapping: indo + eng + abbrev -> indo
+_TZ_WIB = __import__('datetime').timezone(__import__('datetime').timedelta(hours=7))
+
+
+def _now_wib():
+    """Return datetime.now() in WIB timezone."""
+    return datetime.now(tz=_TZ_WIB)
 
 
 def parse_question(text: str) -> dict:
@@ -53,18 +60,18 @@ def parse_question(text: str) -> dict:
     # Detect relative time (lusa first, before besok)
     if "lusa" in text:
         result["relative"] = "lusa"
-        target = datetime.now() + timedelta(days=2)
+        target = _now_wib() + timedelta(days=2)
         result["date"] = target.strftime("%Y-%m-%d")
         result["hari"] = HARI.get(target.strftime("%A").lower())
     elif "besok" in text or "tomorrow" in text or "besoknya" in text:
         result["relative"] = "besok"
-        target = datetime.now() + timedelta(days=1)
+        target = _now_wib() + timedelta(days=1)
         result["date"] = target.strftime("%Y-%m-%d")
         result["hari"] = HARI.get(target.strftime("%A").lower())
     elif "hari ini" in text or "sekarang" in text or "today" in text:
         result["relative"] = "hari ini"
-        result["date"] = datetime.now().strftime("%Y-%m-%d")
-        result["hari"] = HARI.get(datetime.now().strftime("%A").lower())
+        result["date"] = _now_wib().strftime("%Y-%m-%d")
+        result["hari"] = HARI.get(_now_wib().strftime("%A").lower())
 
     # Detect specific day
     for h, h_id in HARI_MAP.items():
@@ -74,7 +81,7 @@ def parse_question(text: str) -> dict:
 
     # Detect keyword (mata kuliah)
     stop_words = {"jadwal", "kelas", "kuliah", "apa", "kapan", "siang", "malam",
-                  "hari", "ini", "besok", "lusa", "minggu", "ini", "aja", "dong",
+                  "hari", "ini", "besok", "lusa", "minggu", "aja", "dong",
                   "deh", "ya", "kok", "sih", "presensi", "deadline", "tugas",
                   "tenggat", "ada", "di", "ke", "dari", "untuk", "yang", "mau"}
     words = re.findall(r"\b[a-z]{4,}\b", text)
@@ -121,7 +128,7 @@ def answer_presensi(intent_data: dict, schedules: dict) -> str:
         return "Maaf, hari yang kamu maksud apa? Coba: 'kapan presensi selasa' atau 'besok ada kelas?'"
 
     slots = []
-    for who in ("saya", "pacar"):
+    for who in MHS_ACCOUNTS:
         s = schedules.get(who, {}).get(hari, [])
         for jam, mk, ruang in s:
             slots.append((who, jam, mk, ruang))
@@ -131,6 +138,6 @@ def answer_presensi(intent_data: dict, schedules: dict) -> str:
 
     lines = [f"📅 Presensi hari {hari.title()}:"]
     for who, jam, mk, ruang in slots:
-        nama = "Hafizh" if who == "saya" else "Azfa"
+        nama = MHS_ACCOUNTS[who]["name"]
         lines.append(f"  • 🕐 {jam} - {mk} ({nama}, Ruang {ruang})")
     return "\n".join(lines)

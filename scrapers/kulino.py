@@ -138,7 +138,7 @@ async def scrape_course_files(page, course_url: str) -> list[dict]:
     except Exception:
         pass
 
-    files = await page.evaluate("""() => {
+    files = await page.evaluate(r"""() => {
         const items = [];
         // Moodle resource table format
         const rows = document.querySelectorAll('table.generaltable tbody tr, .resourcecontent tr, li.resource, .activity.resource, .activity-item');
@@ -167,7 +167,7 @@ async def scrape_course_files(page, course_url: str) -> list[dict]:
 
     # Fallback: parse page text for file links
     if not files:
-        logger.info("Resource table not found, parsing page text...")
+        logger.debug("Resource table not found, parsing page text...")
         body = await page.inner_text("body")
         lines = body.split("\n")
         for line in lines:
@@ -182,7 +182,7 @@ async def scrape_course_files(page, course_url: str) -> list[dict]:
                     "modified_time": "",
                 })
 
-    logger.info(f"Files found: {len(files)}")
+    logger.debug(f"Files found: {len(files)}")
     return files
 
 
@@ -191,7 +191,7 @@ async def download_file(page, file_url: str, dest_path: Path) -> bool:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         async with page.context.expect_page(timeout=15000) as new_page_info:
-            await page.evaluate(f"window.open('{file_url}', '_blank')")
+            await page.evaluate("(url) => window.open(url, '_blank')", file_url)
         new_page = await new_page_info.value
         await new_page.wait_for_load_state("networkidle", timeout=15000)
         # If it's directly a file, download via Playwright
@@ -203,9 +203,9 @@ async def download_file(page, file_url: str, dest_path: Path) -> bool:
 
     # Fallback: use fetch + save
     try:
-        response = await page.evaluate(f"""
-            async () => {{
-                const resp = await fetch('{file_url}');
+        response = await page.evaluate("""
+            async (url) => {{
+                const resp = await fetch(url);
                 if (!resp.ok) return null;
                 const blob = await resp.blob();
                 return await new Promise((resolve) => {{
@@ -214,7 +214,7 @@ async def download_file(page, file_url: str, dest_path: Path) -> bool:
                     reader.readAsDataURL(blob);
                 }});
             }}
-        """)
+        """, file_url)
         if response:
             import base64
             _, encoded = response.split(",", 1)

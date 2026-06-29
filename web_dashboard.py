@@ -1,6 +1,7 @@
-"""Dashboard Web untuk Presensi Udinus Bot.
-Fitur: status, jadwal, deadline, log, search, filter, notif, settings,
-       chart timeline, export CSV, history presensi, dark mode, calendar view.
+"""Web dashboard — Flask-based admin UI and API.
+
+REST API for account management, autopilot control,
+logbook viewer, and real-time status monitoring.
 """
 import csv
 import io
@@ -9,15 +10,17 @@ import logging
 import os
 import re
 import threading
+import hmac
 from datetime import datetime, timedelta
 from pathlib import Path
-from flask import Flask, jsonify, request, send_file, abort, Response, make_response
+from flask import Flask, jsonify, request, send_file, abort, Response, make_response, redirect
 from config import (
     LOG_FILE, TASKS_DEADLINE_FILE, SCHEDULES_FILE,
     SCREENSHOT_TUGAS, SCREENSHOT_PRESENSI,
     KULINO_ACCOUNTS, BOT_START_TIME, LOG_DIR,
     get_stats_snapshot,
     CONTROL, CONTROL_LOCK, get_control, PRESENSI_HISTORY_FILE, KHS_HISTORY_FILE,
+    MHS_ACCOUNTS, save_accounts_to_file, reload_accounts, DASH_TOKEN,
 )
 from constants import HARI_ID
 
@@ -28,7 +31,6 @@ ROOT = Path(__file__).parent
 logger = logging.getLogger(__name__)
 
 # === Auth token (WAJIB dari env) ===
-DASH_TOKEN = os.environ.get("DASH_TOKEN")
 if not DASH_TOKEN:
     raise RuntimeError("DASH_TOKEN tidak ditemukan! Set environment variable DASH_TOKEN, atau isi di .env")
 logger.info("Dashboard token loaded from DASH_TOKEN env")
@@ -108,21 +110,22 @@ def format_tanggal(dt_str):
         return dt_str
 
 def _get_token() -> str | None:
-    """Extract token from: Authorization Bearer > Cookie > X-Dash-Token header > token param."""
+    """Extract token from: Auth Bearer Header > Cookie > X-Dash-Token header.
+    Query param ?token= ONLY works on root / page (sets cookie & redirects clean)."""
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[7:]
     return (request.cookies.get("dash_token")
-            or request.headers.get("X-Dash-Token")
-            or request.args.get("token"))
+            or request.headers.get("X-Dash-Token"))
 
 
 def _require_token_decorator(f):
+    import hmac
     from functools import wraps
     @wraps(f)
     def wrapper(*args, **kwargs):
         tok = _get_token()
-        if tok != DASH_TOKEN:
+        if not tok or not hmac.compare_digest(tok, DASH_TOKEN):
             abort(401)
         return f(*args, **kwargs)
     return wrapper
@@ -140,17 +143,28 @@ def _set_token_cookie(response, token: str | None) -> None:
 # ============ API Routes ============
 @app.route("/")
 def index():
+    # Auth via query param: set cookie and redirect to clean URL
+    qs_token = request.args.get("token")
+    if qs_token == DASH_TOKEN:
+        resp = make_response(redirect("/"))
+        _set_token_cookie(resp, qs_token)
+        return resp
+
     token = _get_token()
+    if not token:
+        abort(401)
     resp = make_response(dashboard_page(token))
-    _set_token_cookie(resp, token or DASH_TOKEN)
+    _set_token_cookie(resp, token)
     return resp
 
 @app.route("/<page>")
 def pages(page):
-    if page in ("dashboard","jadwal","deadline","history","khs","calendar","log","settings","logbook"):
+    if page in ("dashboard","jadwal","deadline","history","khs","calendar","log","settings","logbook","accounts"):
         token = _get_token()
+        if not token:
+            abort(401)
         resp = make_response(dashboard_page(token))
-        _set_token_cookie(resp, token or DASH_TOKEN)
+        _set_token_cookie(resp, token)
         return resp
     return index()
 
@@ -161,9 +175,8 @@ def dashboard_page(token, page="dashboard"):
         ("deadline", "Deadline", "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"),
         ("history", "Presensi", "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"),
         ("khs", "Nilai & KHS", "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"),
-        ("logbook", "Logbook", "M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"),
-        ("calendar", "Calendar", "M8 7V3m0 2.586l5.293-5.293a1 1 0 011.414 0L20 5.414V17a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2h2z"),
-        ("log", "Log", "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"),
+
+        ("accounts", "Accounts", "M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"),
         ("settings", "Settings", "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"),
     ]
     nav_html = ""
@@ -172,10 +185,10 @@ def dashboard_page(token, page="dashboard"):
 
     template_path = ROOT / "templates" / "dashboard.html"
     html = template_path.read_text(encoding="utf-8")
-    
+
     html = html.replace("{{nav_html}}", nav_html)
     html = html.replace("{{token_json}}", json.dumps(token))
-    
+
     return "<!DOCTYPE html>\n" + html
 
 # ============ JSON API endpoints ============
@@ -187,8 +200,12 @@ def status():
     hari_id = HARI_ID.get(now.strftime("%A").lower(), "")
 
     schedules = read_json(SCHEDULES_FILE)
-    today_saya = schedules.get("saya", {}).get(hari_id, [])
-    today_pacar = schedules.get("pacar", {}).get(hari_id, [])
+
+    jadwal_hari_ini = {}
+    for who in KULINO_ACCOUNTS:
+        nama = KULINO_ACCOUNTS[who]["name"]
+        who_sched = sorted(schedules.get(who, {}).get(hari_id, []), key=lambda s: s[0] if s else "")
+        jadwal_hari_ini[nama] = [{"jam": j, "matkul": m, "ruang": r} for j, m, r in who_sched]
 
     deadlines = read_json(TASKS_DEADLINE_FILE)
     active_deadline = sum(1 for k in deadlines if k != "notified")
@@ -203,10 +220,7 @@ def status():
         "besok": esok.strftime("%A, %d %B %Y"),
         "autopilot": "Aktif" if get_control("autopilot") else "Nonaktif",
         "stat": get_stats_snapshot(),
-        "jadwal_hari_ini": {
-            KULINO_ACCOUNTS["saya"]["name"]: [{"jam": j, "matkul": m, "ruang": r} for j, m, r in today_saya],
-            KULINO_ACCOUNTS["pacar"]["name"]: [{"jam": j, "matkul": m, "ruang": r} for j, m, r in today_pacar],
-        },
+        "jadwal_hari_ini": jadwal_hari_ini,
         "deadline": {
             "aktif": active_deadline,
             "items": [{"name": v.get("name",k), "deadline": format_tanggal(v.get("deadline_iso","")),
@@ -225,9 +239,12 @@ def status():
 def jadwal():
     schedules = read_json(SCHEDULES_FILE)
     data = {}
-    for who in ("saya", "pacar"):
+    for who in KULINO_ACCOUNTS:
         nama = KULINO_ACCOUNTS[who]["name"]
-        data[nama] = schedules.get(who, {})
+        who_sched = {}
+        for hari, slots in schedules.get(who, {}).items():
+            who_sched[hari] = sorted(slots, key=lambda s: s[0] if s else "")
+        data[nama] = who_sched
     return jsonify(data)
 
 
@@ -247,7 +264,7 @@ def deadline():
 def log():
     lines = read_file_lines(LOG_FILE, 500)
     errors = [ln for ln in lines if re.search(r"\b(ERROR|CRITICAL)\b", ln)]
-    n = min(int(request.args.get("n", 50)), 500)
+    n = max(1, min(int(request.args.get("n", 50)), 500))
     return jsonify({"total": len(lines), "errors": len(errors), "lines": lines[-n:]})
 
 
@@ -262,7 +279,13 @@ def logbook_viewer():
             if not fn.endswith(".md"):
                 continue
             date_str = fn[:-3]
-            content = (ROOT / LOG_DIR / fn).read_text(encoding="utf-8")
+            # Path traversal guard
+            if not date_str.replace("-", "").replace("_", "").isalnum():
+                continue
+            try:
+                content = (ROOT / LOG_DIR / fn).read_text(encoding="utf-8")
+            except (OSError, ValueError):
+                continue
             entries = []
             for line in content.split("\n"):
                 line = line.strip()
@@ -354,8 +377,8 @@ def trigger_presensi():
     Rate-limited 30 detik per akun."""
     data = request.get_json(silent=True) or {}
     who = data.get("who") or request.args.get("who", "saya")
-    if who not in ("saya", "pacar"):
-        return jsonify({"error": "Invalid who (saya/pacar)"}), 400
+    if who not in MHS_ACCOUNTS:
+        return jsonify({"error": "Invalid who"}), 400
     with CONTROL_LOCK:
         last_ts = CONTROL.get(f"last_trigger_presensi_{who}", 0)
         now_ts = datetime.now().timestamp()
@@ -412,7 +435,20 @@ self.addEventListener('fetch',e=>{
 # === Health check (no auth — untuk monitoring eksternal) ===
 @app.route("/health")
 def health():
-    """Public health endpoint — untuk monitoring / load balancer."""
+    """Health endpoint — public or auth based on HEALTH_PUBLIC config."""
+    from config import HEALTH_PUBLIC
+    if not HEALTH_PUBLIC:
+        auth = request.headers.get("Authorization", "")
+        cookie_token = request.cookies.get("dash_token", "")
+        auth_ok = False
+        if auth.startswith("Bearer "):
+            auth_ok = hmac.compare_digest(auth[7:], DASH_TOKEN)
+        elif cookie_token:
+            auth_ok = cookie_token == DASH_TOKEN
+        elif request.args.get("token"):
+            auth_ok = request.args.get("token") == DASH_TOKEN
+        if not auth_ok:
+            return jsonify({"error": "unauthorized"}), 401
     now = datetime.now()
     try:
         delta = now - BOT_START_TIME
@@ -446,6 +482,75 @@ def history_clear():
     save_history([])
     return jsonify({"cleared": True})
 
+# === Accounts Management ===
+@app.route("/api/accounts", methods=["GET"])
+@_require_token
+def get_accounts():
+    """Get all configured accounts (passwords hidden)."""
+    return jsonify({
+        "kulino": {k: {"nim": v.get("nim", ""), "name": v.get("name", "")} for k, v in KULINO_ACCOUNTS.items()},
+        "mhs": {k: {"nim": v.get("nim", ""), "name": v.get("name", "")} for k, v in MHS_ACCOUNTS.items()}
+    })
+
+@app.route("/api/accounts", methods=["POST"])
+@_require_token
+def save_accounts():
+    """Save account data."""
+    data = request.json
+    if not data:
+        return jsonify({"error": "No data"}), 400
+
+    # We load current raw dict, apply updates, and save
+    from config import _accounts, CONTROL_LOCK
+
+    kulino = data.get("kulino", {})
+    mhs = data.get("mhs", {})
+
+    with CONTROL_LOCK:
+        _accounts.setdefault("kulino", {})
+        _accounts.setdefault("mhs", {})
+
+        # Update kulino
+        for k, v in kulino.items():
+            if k not in _accounts["kulino"]:
+                _accounts["kulino"][k] = {}
+            _accounts["kulino"][k]["nim"] = v.get("nim", "")
+            _accounts["kulino"][k]["name"] = v.get("name", "")
+            if v.get("password"):
+                _accounts["kulino"][k]["password"] = v.get("password")
+
+        # Update mhs
+        for k, v in mhs.items():
+            if k not in _accounts["mhs"]:
+                _accounts["mhs"][k] = {}
+            _accounts["mhs"][k]["nim"] = v.get("nim", "")
+            _accounts["mhs"][k]["name"] = v.get("name", "")
+            if v.get("password"):
+                _accounts["mhs"][k]["password"] = v.get("password")
+
+    save_accounts_to_file(_accounts)
+    reload_accounts()
+
+    return jsonify({"success": True})
+
+@app.route("/api/accounts/<platform>/<account_id>", methods=["DELETE"])
+@_require_token
+def delete_account(platform, account_id):
+    if platform not in ("kulino", "mhs"):
+        return jsonify({"error": "Invalid platform"}), 400
+
+    from config import _accounts, CONTROL_LOCK
+    found = False
+    with CONTROL_LOCK:
+        if account_id in _accounts.get(platform, {}):
+            del _accounts[platform][account_id]
+            found = True
+    if found:
+        save_accounts_to_file(_accounts)
+        reload_accounts()
+        return jsonify({"success": True})
+    return jsonify({"error": "Account not found"}), 404
+
 
 # === KHS History ===
 @app.route("/khs/history")
@@ -469,7 +574,7 @@ def export_csv():
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Section", "Owner", "Day", "Time", "Course", "Room"])
-    for who in ("saya", "pacar"):
+    for who in KULINO_ACCOUNTS:
         nama = KULINO_ACCOUNTS[who]["name"]
         for hari, slots in schedules.get(who, {}).items():
             for jam, mk, ruang in slots:
@@ -488,7 +593,7 @@ def export_csv():
 
 # ============ Start Server ============
 def start_server(port=8787, debug=False):
-    print(f"Dashboard: http://127.0.0.1:{port}?token=... (Or use Authorization: Bearer {DASH_TOKEN})")
+    print(f"Dashboard: http://127.0.0.1:{port}/?token=... (sets cookie, then use cookie/header)")
     app.run(host="127.0.0.1", port=port, debug=debug, use_reloader=False, threaded=True)
 
 

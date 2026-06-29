@@ -1,9 +1,12 @@
-"""Telegram API client - async, tidak block event loop.
+"""Telegram API client — async HTTP helpers.
 
-Reuse single AsyncClient across all calls (HTTP/2 keep-alive).
+Low-level wrappers around Bot API methods with retry logic,
+connection pooling, and file upload support.
 """
+import asyncio
 import logging
 import os
+
 import httpx
 
 from config import BOT_TOKEN, inc_stat
@@ -12,16 +15,22 @@ logger = logging.getLogger(__name__)
 
 # Shared client (HTTP/2 keep-alive, connection pool)
 _client: httpx.AsyncClient | None = None
+_client_timeout: float = 0.0
+_client_lock = asyncio.Lock()
 
 
 async def _get_client(timeout: float = 30.0) -> httpx.AsyncClient:
-    """Lazy-init shared AsyncClient."""
-    global _client
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=timeout,
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        )
+    """Lazy-init shared AsyncClient. Recreate if existing timeout too low."""
+    global _client, _client_timeout
+    async with _client_lock:
+        if _client is None or _client.is_closed or _client_timeout < timeout:
+            if _client and not _client.is_closed:
+                await _client.aclose()
+            _client = httpx.AsyncClient(
+                timeout=timeout,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            )
+            _client_timeout = timeout
     return _client
 
 
@@ -107,14 +116,13 @@ async def send_photo(photo_path: str, chat_ids: list[int] | None = None) -> bool
         return False
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     success = False
-    with open(photo_path, "rb") as f:
-        file_bytes = f.read()
     client = await _get_client(60)
     for chat_id in targets:
         try:
-            files = {"photo": (os.path.basename(photo_path), file_bytes, "image/png")}
-            data = {"chat_id": str(chat_id)}
-            r = await client.post(url, data=data, files=files)
+            with open(photo_path, "rb") as f:
+                files = {"photo": (os.path.basename(photo_path), f, "image/png")}
+                data = {"chat_id": str(chat_id)}
+                r = await client.post(url, data=data, files=files)
             if r.status_code == 200:
                 inc_stat("photos_sent")
                 logger.info(f"Foto terkirim ke {chat_id}")
@@ -156,10 +164,28 @@ async def send_document(doc_path: str, caption: str = "", chat_ids: list[int] | 
     return success
 
 
+async def delete_webhook() -> bool:
+    """Hapus webhook aktif sebelum polling dimulai. Cegah error 409 Conflict."""
+    if not BOT_TOKEN:
+        return False
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+    try:
+        client = await _get_client(10)
+        r = await client.get(url)
+        if r.status_code == 200:
+            logger.info("Webhook deleted successfully")
+            return True
+        logger.error(f"deleteWebhook: {r.status_code} {r.text[:200]}")
+        return False
+    except Exception as e:
+        logger.error(f"deleteWebhook error: {e}")
+        return False
+
+
 async def get_updates(offset: int | None = None) -> list[dict]:
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
     params = {"timeout": 30}
-    if offset:
+    if offset is not None:
         params["offset"] = offset
     try:
         client = await _get_client(60)

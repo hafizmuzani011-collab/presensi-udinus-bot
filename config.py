@@ -35,6 +35,8 @@ STATS_FILE = os.path.join(RUNTIME_DIR, "stats.json")
 NILAI_FILE = os.path.join(RUNTIME_DIR, "nilai_cache.json")
 KHS_HISTORY_FILE = os.path.join(RUNTIME_DIR, "khs_history.json")
 MATERIALS_CACHE_FILE = os.path.join(RUNTIME_DIR, "materials_cache.json")
+# ==== Persistent account store ====
+ACCOUNTS_FILE = os.path.join(DATA_DIR, "accounts.json")
 
 SCREENSHOT_TUGAS = os.path.join(SCREENSHOTS_DIR, "bukti_tugas.png")
 SCREENSHOT_PRESENSI = os.path.join(SCREENSHOTS_DIR, "bukti_presensi.png")
@@ -58,38 +60,72 @@ def _req_env(key, display_name):
         raise RuntimeError(f"{display_name} ({key}) tidak ditemukan di .env!")
     return val
 
-KULINO_ACCOUNTS = {
-    "saya": {
-        "nim": _req_env("KULINO_SAYA_NIM", "Kulino NIM"),
-        "password": _req_env("KULINO_SAYA_PASS", "Kulino password"),
-        "name": NAMA_SAYA,
-    },
-    "pacar": {
-        "nim": _req_env("KULINO_PACAR_NIM", "Kulino NIM pacar"),
-        "password": _req_env("KULINO_PACAR_PASS", "Kulino password pacar"),
-        "name": NAMA_PACAR,
-    },
-}
-MHS_ACCOUNTS = {
-    "saya": {
-        "nim": _req_env("MHS_SAYA_NIM", "MHS NIM"),
-        "password": _req_env("MHS_SAYA_PASS", "MHS password"),
-        "name": NAMA_SAYA,
-    },
-    "pacar": {
-        "nim": _req_env("MHS_PACAR_NIM", "MHS NIM pacar"),
-        "password": _req_env("MHS_PACAR_PASS", "MHS password pacar"),
-        "name": NAMA_PACAR,
-    },
-}
+
+def _load_accounts_from_env() -> dict:
+    """Build default accounts dict from .env."""
+    return {
+        "kulino": {
+            "saya": {"nim": os.getenv("KULINO_SAYA_NIM", ""), "password": os.getenv("KULINO_SAYA_PASS", ""), "name": NAMA_SAYA},
+            "pacar": {"nim": os.getenv("KULINO_PACAR_NIM", ""), "password": os.getenv("KULINO_PACAR_PASS", ""), "name": NAMA_PACAR},
+        },
+        "mhs": {
+            "saya": {"nim": os.getenv("MHS_SAYA_NIM", ""), "password": os.getenv("MHS_SAYA_PASS", ""), "name": NAMA_SAYA},
+            "pacar": {"nim": os.getenv("MHS_PACAR_NIM", ""), "password": os.getenv("MHS_PACAR_PASS", ""), "name": NAMA_PACAR},
+        },
+    }
+
+def _load_accounts_from_file() -> dict:
+    """Load accounts from accounts.json if it exists."""
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+def save_accounts_to_file(data: dict) -> None:
+    """Persist accounts dict to accounts.json."""
+    os.makedirs(os.path.dirname(ACCOUNTS_FILE), exist_ok=True)
+    atomic_write(ACCOUNTS_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+
+def reload_accounts() -> None:
+    """Reload MHS_ACCOUNTS and KULINO_ACCOUNTS from accounts.json (or .env fallback)."""
+    file_data = _load_accounts_from_file()
+    env_data = _load_accounts_from_env()
+
+    kulino_src = file_data.get("kulino") or env_data.get("kulino", {})
+    mhs_src = file_data.get("mhs") or env_data.get("mhs", {})
+
+    with CONTROL_LOCK:
+        KULINO_ACCOUNTS.clear()
+        KULINO_ACCOUNTS.update(kulino_src)
+        MHS_ACCOUNTS.clear()
+        MHS_ACCOUNTS.update(mhs_src)
+
+
+
+# Initialize accounts: prefer file, fallback to .env
+_accounts = _load_accounts_from_file() or _load_accounts_from_env()
+KULINO_ACCOUNTS = _accounts.get("kulino", {})
+MHS_ACCOUNTS = _accounts.get("mhs", {})
+
+if not os.path.exists(ACCOUNTS_FILE):
+    save_accounts_to_file(_accounts)
+
 
 # ==== LLM (optional) ====
 CLAUDEFIRE_API_KEY = os.getenv("CLAUDEFIRE_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash-free")
 
-# ==== Bot State ====
+# ==== Google Calendar iCal (optional) ====
+GCAL_SAYA_ICAL_URL = os.getenv("GCAL_SAYA_ICAL_URL", "")
+GCAL_PACAR_ICAL_URL = os.getenv("GCAL_PACAR_ICAL_URL", "")
+
+DASH_TOKEN = os.getenv("DASH_TOKEN") or ""
+HEALTH_PUBLIC = os.getenv("HEALTH_PUBLIC", "0") == "1"  # Set to "1" for public /health (e.g. load balancer)
 ALLOWED_CHAT_ID = None
-ALLOWED_CHAT_IDS: list[int] = []
+ALLOWED_CHAT_IDS: set[int] = set()
 BOT_START_TIME = datetime.now()
 STATS = {
     "messages_received": 0,
@@ -124,6 +160,10 @@ def save_stats() -> bool:
         logging.getLogger(__name__).error(f"Save stats gagal: {e}")
         return False
 
+async def asave_stats() -> bool:
+    import asyncio
+    return await asyncio.to_thread(save_stats)
+
 
 # ==== Control state (shared between bot.py and web_dashboard.py) ====
 # Dipindah ke sini agar tidak circular import.
@@ -148,5 +188,5 @@ def consume_control(key: str, default=None):
     with CONTROL_LOCK:
         val = CONTROL.get(key, default)
         if key in CONTROL:
-            CONTROL[key] = default if default is not None else ""
+            CONTROL[key] = default
         return val

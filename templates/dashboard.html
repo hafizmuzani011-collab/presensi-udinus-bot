@@ -218,6 +218,41 @@ Dark Mode
 <div id="logbookList" class="space-y-4"></div>
 </div>
 
+<!-- ACCOUNTS -->
+<div id="page-accounts" class="page-section hidden">
+<div class="mb-8"><h2 class="text-2xl font-bold">Accounts Management</h2><p class="text-gray-500 text-sm">Kelola akun Kulino dan MHS (tanpa ubah .env)</p></div>
+
+<div class="grid md:grid-cols-2 gap-6">
+  <!-- KULINO -->
+  <div class="bg-white border border-gray-200 rounded-xl p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-bold">Kulino Accounts</h3>
+    </div>
+    <div id="kulinoAccountsList" class="space-y-3 mb-4"></div>
+  </div>
+
+  <!-- MHS -->
+  <div class="bg-white border border-gray-200 rounded-xl p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h3 class="text-lg font-bold">MHS Accounts</h3>
+    </div>
+    <div id="mhsAccountsList" class="space-y-3 mb-4"></div>
+  </div>
+</div>
+
+<div class="mt-6 bg-white border border-gray-200 rounded-xl p-6 max-w-lg">
+  <h3 class="font-bold mb-4">Edit / Update Account</h3>
+  <div class="space-y-3">
+    <select id="accPlatform" class="w-full text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2"><option value="kulino">Kulino</option><option value="mhs">MHS</option></select>
+    <input id="accId" type="text" placeholder="ID (contoh: saya, pacar)" class="w-full text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+    <input id="accName" type="text" placeholder="Nama Tampilan (contoh: Hafizh)" class="w-full text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+    <input id="accNim" type="text" placeholder="NIM" class="w-full text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+    <input id="accPass" type="password" placeholder="Password (kosongkan jika tidak diubah)" class="w-full text-sm bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+    <button onclick="saveAccount()" class="w-full text-sm bg-indigo-600 text-white font-medium px-4 py-2 rounded-lg hover:bg-indigo-700">Simpan Akun</button>
+  </div>
+</div>
+</div>
+
 <!-- SETTINGS -->
 <div id="page-settings" class="page-section hidden">
 <div class="mb-8"><h2 class="text-2xl font-bold">Settings</h2></div>
@@ -231,6 +266,7 @@ Dark Mode
 <select id="presensiWho" class="text-sm bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-gray-700">
 <option value="saya">Hafizh (Saya)</option>
 <option value="pacar">Azfa (Pacar)</option>
+<option value="Kawan">Kevin (Kawan)</option>
 </select>
 <button onclick="triggerPresensi()" class="flex-1 text-sm bg-indigo-50 text-indigo-700 px-4 py-2 rounded-lg hover:bg-indigo-100 border border-indigo-200">Presensi Sekarang</button>
 </div>
@@ -283,6 +319,7 @@ if(page==='history')renderHistory();
 if(page==='calendar')renderCalendar();
 if(page==='khs')renderKHSChart();
 if(page==='jadwal')renderJadwalFull();
+if(page==='accounts')renderAccounts();
 if(page==='deadline')doSearch();
 if(page==='log')renderLogFull();
 if(page==='logbook')renderLogbook();
@@ -325,7 +362,7 @@ document.getElementById('jw').innerHTML=h||'<p class="px-6 py-4 text-sm text-gra
 document.getElementById('jadwalCount').textContent=cnt;
 renderDeadline(s.deadline?.items||[]);
 var lw=document.getElementById('lw');
-lw.innerHTML=(!s.log_errors||s.log_errors.length===0)?'<p class="text-sm text-gray-400 italic">Tidak ada error</p>'
+if(lw)lw.innerHTML=(!s.log_errors||s.log_errors.length===0)?'<p class="text-sm text-gray-400 italic">Tidak ada error</p>'
 :s.log_errors.map(function(l){return'<div class="flex items-start gap-3 py-2 border-b border-gray-100"><div class="w-2 h-2 bg-red-500 rounded-full mt-1.5 shrink-0"></div><div><p class="text-xs text-gray-500">baru</p><p class="text-sm">'+l+'</p></div></div>';}).join('');
 renderJadwalFull();
 renderDeadlineFull();
@@ -501,7 +538,7 @@ document.getElementById('calWeek').textContent=weekStart.toLocaleDateString('id-
 async function doCleanup(){if(!confirm('Hapus semua deadline yang sudah lewat?'))return;var r=await ap('/cleanup','POST');notify('Dihapus: '+r.removed+' deadline','success');await ld();}
 async function ta(){var r=await ap('/control/toggle-autopilot','POST');notify('Autopilot: '+(r.autopilot?'Aktif':'Nonaktif'),'success');ld();}
 async function tt(){await ap('/control/trigger-tugas','POST');notify('Tugas check dikirim!','info');}
-async function triggerPresensi(){var who=document.getElementById('presensiWho').value;var r=await fetch('/control/trigger-presensi?who='+who,{method:'POST',headers:{'X-Dash-Token':TOKEN}}).then(r=>r.ok?r.json():{}).catch(e=>({}));notify('Presensi '+(who==='saya'?'Hafizh':'Azfa')+' dikirim!','info');}
+async function triggerPresensi(){var who=document.getElementById('presensiWho').value;var nama=who==='saya'?'Hafizh':(who==='pacar'?'Azfa':who);var r=await fetch('/control/trigger-presensi?who='+who,{method:'POST',headers:{'X-Dash-Token':TOKEN}}).then(r=>r.ok?r.json():{}).catch(e=>({}));notify('Presensi '+nama+' dikirim!','info');}
 function rf(){ld();}
 function filterCards(q){q=q.toLowerCase();var d=currentData?.deadline?.items||[];var f=d.filter(i=>i.name.toLowerCase().includes(q));renderDeadline(f);}
 function filterByUser(u){var d=currentData?.deadline?.items||[];var f=u==='all'?d:d.filter(i=>i.account===u);renderDeadline(f);}
@@ -561,6 +598,48 @@ function doInstall(){if(deferredPrompt){deferredPrompt.prompt();deferredPrompt.u
 tickClock();
 setInterval(tickClock,1000);
 setInterval(ld,30000);
+
+function renderAccounts(){
+  ap('/api/accounts').then(function(d){
+    if(!d)return;
+    renderAccountList('kulinoAccountsList',d.kulino||{});
+    renderAccountList('mhsAccountsList',d.mhs||{});
+  });
+}
+function renderAccountList(id, data){
+  var el = document.getElementById(id);
+  if(!el) return;
+  var h = '';
+  for(var k in data){
+    var v = data[k];
+    h += '<div class="flex justify-between items-center p-3 bg-gray-50 border border-gray-200 rounded-lg">' +
+         '<div><div class="font-semibold">' + esc(v.name||k) + '</div><div class="text-xs text-gray-500 font-mono">' + esc(v.nim) + '</div></div>' +
+         '<button onclick="deleteAccount(\''+id.replace('List','')+'\',\''+k+'\')" class="text-red-500 hover:text-red-700 text-sm font-medium px-2">✕</button></div>';
+  }
+  el.innerHTML = h || '<p class="text-gray-400 text-sm italic">Tidak ada akun</p>';
+}
+function deleteAccount(platform, id){
+  if(!confirm('Hapus akun '+id+' ('+platform+')?')) return;
+  ap('/api/accounts/'+platform+'/'+id, 'DELETE').then(function(){
+    notify('Akun dihapus!','success');
+    renderAccounts();
+  });
+}
+function saveAccount(){
+  var platform = document.getElementById('accPlatform').value;
+  var id = document.getElementById('accId').value.trim();
+  var name = document.getElementById('accName').value.trim();
+  var nim = document.getElementById('accNim').value.trim();
+  var pass = document.getElementById('accPass').value;
+  if(!id||!nim) return notify('ID dan NIM wajib diisi','error');
+  var payload = {kulino:{}, mhs:{}};
+  payload[platform][id] = {nim:nim, name:name||id, password:pass};
+  fetch('/api/accounts',{method:'POST',headers:{'X-Dash-Token':TOKEN,'Content-Type':'application/json'},body:JSON.stringify(payload)})
+  .then(r=>r.json()).then(d=>{
+    if(d.success){notify('Akun tersimpan!','success');renderAccounts();}
+    else notify('Gagal: '+d.error,'error');
+  }).catch(e=>notify('Error','error'));
+}
 </script>
 </body>
 </html>

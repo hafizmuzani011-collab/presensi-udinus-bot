@@ -2,17 +2,20 @@
 import logging
 import re
 from datetime import datetime, timedelta
+import httpx
 
 from config import KULINO_ACCOUNTS
 from constants import HARI_ID, HARI_MAP
-from storage import load_schedules, load_tasks_deadlines, save_tasks_deadlines
+from storage import aload_tasks_deadlines, asave_tasks_deadlines
 
 logger = logging.getLogger(__name__)
 
 
-def get_schedule_for(name: str, hari: str) -> str:
+def get_schedule_for(name: str, hari: str, schedules: dict = None) -> str:
     """Ambil jadwal kuliah untuk hari tertentu ('senin', 'besok', 'hari ini')."""
-    schedules = load_schedules()
+    if schedules is None:
+        import storage
+        schedules = storage.load_schedules()
     if name not in schedules:
         return f"Jadwal {name.title()} tidak ditemukan."
 
@@ -123,7 +126,7 @@ def _extract_time(text: str, default_h: int, default_m: int) -> tuple[int, int]:
 async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send_message) -> None:
     """Parse deadline dari tugas, simpan ke cache, kirim reminder H-12/H-6."""
     account_name = KULINO_ACCOUNTS[account_key]["name"]
-    cache = load_tasks_deadlines()
+    cache = await aload_tasks_deadlines()
     now = datetime.now()
 
     cache, dirty = _update_deadlines_cache(cache, tasks, account_key, account_name, now)
@@ -131,7 +134,7 @@ async def process_and_remind_deadlines(tasks: list[dict], account_key: str, send
 
     if dirty or reminded:
         cache["notified"] = cache.get("notified", {})
-        save_tasks_deadlines(cache)
+        await asave_tasks_deadlines(cache)
         if reminded:
             count = sum(1 for k in cache if k != "notified")
             logger.info(f"Deadline reminders sent | tasks updated: {count}")
@@ -221,3 +224,80 @@ async def _send_h12_reminder(data: dict, send_message) -> bool:
            f"📖 *{data['name']}*\n👤 {data['account']}\n📚 {data['course']}\n"
            f"📅 {data['deadline_raw']}")
     return await send_message(msg)
+
+
+async def get_weather_info() -> str:
+    """Get today's weather forecast for Semarang from Open-Meteo."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": -6.98,
+                    "longitude": 110.41,
+                    "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,weathercode",
+                    "timezone": "Asia/Jakarta",
+                    "forecast_days": 1
+                }
+            )
+            resp.raise_for_status()
+            data = resp.json().get("daily", {})
+            if not data:
+                return ""
+
+            t_max = data["temperature_2m_max"][0]
+            t_min = data["temperature_2m_min"][0]
+            rain_prob = data["precipitation_probability_max"][0]
+            rain_sum = data["precipitation_sum"][0]
+            wcode = data["weathercode"][0]
+
+            desc = _weather_code_to_desc(wcode)
+            emoji = _weather_code_to_emoji(wcode)
+
+            msg = f"{emoji} *Cuaca Hari Ini:*\n"
+            msg += f"   Suhu: {t_min:.0f}°C - {t_max:.0f}°C\n"
+            msg += f"   Kondisi: {desc}\n"
+
+            if rain_prob > 0:
+                msg += f"   Peluang Hujan: {rain_prob}%"
+                if rain_sum > 0:
+                    msg += f" ({rain_sum:.1f} mm)"
+                msg += "\n"
+
+            if rain_prob >= 50:
+                msg += "   ⚠️ *Jangan lupa bawa payung!*"
+            elif rain_prob >= 20:
+                msg += "   🧥 Siap-siap jaket/payung."
+            else:
+                msg += "   🌞 Cuaca cerah, semangat kuliah!"
+
+            return msg
+    except Exception as e:
+        logger.warning(f"Gagal fetch cuaca: {e}")
+        return ""
+
+def _weather_code_to_desc(code: int) -> str:
+    codes = {
+        0: "Cerah", 1: "Sebagian Cerah", 2: "Berawan", 3: "Mendung",
+        45: "Berkabut", 48: "Berkabut", 51: "Gerimis Ringan", 53: "Gerimis Sedang",
+        55: "Gerimis Lebat", 61: "Hujan Ringan", 63: "Hujan Sedang", 65: "Hujan Lebat",
+        71: "Salju Ringan", 73: "Salju Sedang", 75: "Salju Lebat",
+        80: "Hujan Ringan", 81: "Hujan Sedang", 82: "Hujan Sangat Lebat",
+        95: "Badai Petir", 96: "Badai Petir + Hujan Es", 99: "Badai Petir + Hujan Es Lebat",
+    }
+    return codes.get(code, "Tidak Diketahui")
+
+def _weather_code_to_emoji(code: int) -> str:
+    if code == 0:
+        return "☀️"
+    if code in (1, 2, 3):
+        return "⛅"
+    if code in (45, 48):
+        return "🌫️"
+    if code in (51, 53, 55, 61, 63, 65, 80, 81, 82):
+        return "🌧️"
+    if code in (71, 73, 75):
+        return "❄️"
+    if code in (95, 96, 99):
+        return "⛈️"
+    return "🌡️"

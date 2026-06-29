@@ -1,23 +1,29 @@
 """Custom alias commands. Map custom name → perintah bot yang dieksekusi."""
+import asyncio
 import json
 import os
+import threading
+
+from file_utils import atomic_write
 
 ALIAS_FILE = "alias.json"
+_aliases_lock = threading.Lock()
 
 
 def load_aliases() -> dict:
-    if not os.path.exists(ALIAS_FILE):
-        return {}
-    try:
-        with open(ALIAS_FILE) as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with _aliases_lock:
+        if not os.path.exists(ALIAS_FILE):
+            return {}
+        try:
+            with open(ALIAS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
 
 
 def save_aliases(aliases: dict) -> None:
-    with open(ALIAS_FILE, "w", encoding="utf-8") as f:
-        json.dump(aliases, f, indent=2, ensure_ascii=False)
+    with _aliases_lock:
+        atomic_write(ALIAS_FILE, json.dumps(aliases, indent=2, ensure_ascii=False))
 
 
 def resolve_alias(text: str) -> str | None:
@@ -43,3 +49,15 @@ def remove_alias(name: str) -> bool:
         save_aliases(aliases)
         return True
     return False
+
+
+async def aresolve_alias(text: str) -> str | None:
+    return await asyncio.to_thread(resolve_alias, text)
+
+
+async def aadd_alias(name: str, command: str) -> None:
+    await asyncio.to_thread(add_alias, name, command)
+
+
+async def aremove_alias(name: str) -> bool:
+    return await asyncio.to_thread(remove_alias, name)

@@ -44,7 +44,8 @@ class TestPresensiDoneLock:
         import asyncio
         assert isinstance(bot._presensi_done_lock, asyncio.Lock)
 
-    def test_presensi_done_reset_on_new_day(self, tmp_path, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_presensi_done_reset_on_new_day(self, tmp_path, monkeypatch):
         """On new day, _presensi_done resets to empty set."""
         monkeypatch.chdir(tmp_path)
         import bot
@@ -52,6 +53,6 @@ class TestPresensiDoneLock:
         bot._presensi_done = {"saya:senin:07:00"}
         bot._presensi_done_date = "2026-06-20"
         # Today is different -> should reset
-        bot._load_presensi_done_for_today("2026-06-22")
+        await bot._load_presensi_done_for_today("2026-06-22")
         assert bot._presensi_done == set()
         assert bot._presensi_done_date == "2026-06-22"

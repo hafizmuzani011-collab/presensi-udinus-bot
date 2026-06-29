@@ -1,25 +1,60 @@
-"""Command Handlers for Presensi Udinus Bot.
-Extracting handle_command from bot.py to keep the main entry point modular.
+"""Command handlers — Telegram message processing.
+
+Implements all bot commands (/jadwal, /deadline, /presensi, etc.)
+and natural language query handling.
 """
-import os
 import logging
+import os
+import re
 from datetime import datetime, timedelta
 
 from config import (
     KULINO_ACCOUNTS, MHS_ACCOUNTS, SCREENSHOT_JADWAL, SCREENSHOT_PRESENSI,
-    SCREENSHOT_TUGAS, ALLOWED_CHAT_IDS, BOT_START_TIME,
-    get_stats_snapshot, inc_stat,
+    SCREENSHOT_TUGAS, ALLOWED_CHAT_IDS, ADMIN_CHAT_ID, BOT_START_TIME,
+    get_stats_snapshot, inc_stat, NAMA_PACAR, DASH_TOKEN,
 )
 from constants import HARI_ID, HARI_INDONESIA
 from storage import (
-    cleanup_expired_deadlines, load_nilai_cache, load_schedules, load_tasks_deadlines, save_chat_id, save_nilai_cache,
-    save_tasks_deadlines,
+    acleanup_expired_deadlines, aload_nilai_cache, aload_schedules, aload_tasks_deadlines, asave_chat_id, asave_nilai_cache,
+    asave_tasks_deadlines,
 )
 from tg import send_message, send_photo
 from utils import get_schedule_for, process_and_remind_deadlines
-from aliases import add_alias, remove_alias, resolve_alias
+from aliases import aadd_alias, aremove_alias, aresolve_alias
+import scrapers as tb
+from scrapers import format_khs_message
 
 logger = logging.getLogger(__name__)
+
+def _resolve_target(chat_id: int | None, text: str) -> str:
+    t = text.lower()
+    if "azfa" in t or "pacar" in t:
+        return "pacar"
+    for key, acc in MHS_ACCOUNTS.items():
+        if key in ("saya", "pacar"):
+            continue
+        name = acc.get("name", "").lower()
+        if key.lower() in t or name in t:
+            return key
+    return "saya"
+
+def get_account_info(target: str, chat_id: int | None, platform: str = "mhs") -> dict | None:
+    """Resolve account credentials for a given query target.
+    If target is 'pacar', return pacar account.
+    If chat_id is registered in user_manager, return user credentials.
+    Otherwise fallback to 'saya'.
+    """
+    if target == "pacar":
+        return KULINO_ACCOUNTS["pacar"] if platform == "kulino" else MHS_ACCOUNTS["pacar"]
+
+    if chat_id is not None:
+        from user_manager import get_info
+        info = get_info(chat_id)
+        if info and platform in info:
+            return info[platform]
+
+    return KULINO_ACCOUNTS["saya"] if platform == "kulino" else MHS_ACCOUNTS["saya"]
+
 
 # Refer back to bot.py functions or import them locally
 # Using local import/dependencies inside handler to avoid circular imports.
@@ -29,70 +64,118 @@ _do_presensi_func = None
 _login_kulino_func = None
 _update_schedules_func = None
 _check_materials_func = None
+_syncgcal_func = None
 
-def register_callbacks(get_autopilot_fn, set_autopilot_fn, do_presensi_fn, login_kulino_fn, update_schedules_fn, check_materials_fn):
-    global _get_autopilot_func, _set_autopilot_func, _do_presensi_func, _login_kulino_func, _update_schedules_func, _check_materials_func
+def register_callbacks(get_autopilot_fn, set_autopilot_fn, do_presensi_fn, login_kulino_fn, update_schedules_fn, check_materials_fn, syncgcal_fn):
+    global _get_autopilot_func, _set_autopilot_func, _do_presensi_func, _login_kulino_func, _update_schedules_func, _check_materials_func, _syncgcal_func
     _get_autopilot_func = get_autopilot_fn
     _set_autopilot_func = set_autopilot_fn
     _do_presensi_func = do_presensi_fn
     _login_kulino_func = login_kulino_fn
     _update_schedules_func = update_schedules_fn
     _check_materials_func = check_materials_fn
+    _syncgcal_func = syncgcal_fn
 
 async def handle_command(text: str, chat_id: int | None = None) -> None:
     from bot import get_today_holiday
     text = text.strip()
     t = text.lower()
 
-    alias_cmd = resolve_alias(text)
+    alias_cmd = await aresolve_alias(text)
     if alias_cmd:
         text = alias_cmd
         t = text.lower()
 
     if t in ("/start", "start", "halo", "hai", "hi"):
-        await send_message("Halo! 👋 Saya Asisten Presensi Udinus. Ketik `help` untuk bantuan.")
+        from tg import make_inline_keyboard
+        kb = make_inline_keyboard([
+            [{"text": "📅 Jadwal", "callback_data": "cmd:jadwal"}, {"text": "📝 Tugas", "callback_data": "cmd:tugas"}],
+            [{"text": "🤖 Presensi", "callback_data": "cmd:presensi"}, {"text": "📊 Nilai", "callback_data": "cmd:khs"}],
+            [{"text": "🔔 Deadline", "callback_data": "cmd:deadline"}, {"text": "❓ Bantuan", "callback_data": "cmd:help"}]
+        ])
+        await send_message("Halo! 👋 Saya Asisten Akademik Udinus.\n\nPilih menu di bawah atau ketik `help` untuk info lebih lanjut.\n\n📝 Baru? Ketik `/register <NIM> <Password>` untuk daftar.", reply_markup=kb)
+
+    elif t.startswith("/register") or t.startswith("register"):
+        from user_manager import register as reg_user
+        parts = text.split()
+        if len(parts) < 4:
+            await send_message("Gunakan: `/register <NIM> <Password_MHS> <Password_Kulino>`\n\n"
+                               "Password MHS dan Kulino biasanya berbeda.\n"
+                               "Contoh: `/register A11.2024.12345 RahasiaMHS RahasiaKulino`")
+            return
+        nim = parts[1]
+        pwd_mhs = parts[2]
+        pwd_kulino = parts[3]
+        if chat_id is None:
+            await send_message("❌ Error: chat_id tidak dikenal.")
+            return
+        if not re.match(r'^A\d+\.\d{4}\.\d{5}$', nim):
+            await send_message("❌ Format NIM salah. Contoh: `A22.2024.03103`")
+            return
+        if reg_user(chat_id, nim=nim, password_mhs=pwd_mhs, password_kulino=pwd_kulino, name=nim):
+            if chat_id not in ALLOWED_CHAT_IDS:
+                ALLOWED_CHAT_IDS.add(chat_id)
+                await asave_chat_id(chat_id)
+            await send_message(f"✅ Berhasil daftar sebagai *{nim}*! Silakan coba `jadwal hari ini`")
+        else:
+            # Check if rate limited vs already registered
+            from user_manager import _register_attempts, _MAX_REGISTER_ATTEMPTS
+            cid = str(chat_id)
+            if cid in _register_attempts and _register_attempts[cid][0] >= _MAX_REGISTER_ATTEMPTS:
+                await send_message("⏳ Terlalu banyak percobaan. Coba lagi 5 menit lagi.")
+            else:
+                await send_message("❌ Gagal daftar. Kamu mungkin sudah terdaftar.")
+
+    elif t.startswith("/unregister") or t.startswith("unregister"):
+        from user_manager import unregister as unreg
+        if chat_id and unreg(chat_id):
+            await send_message("✅ Data kamu dihapus dari sistem.")
+        else:
+            await send_message("❌ Kamu belum terdaftar.")
+
 
     elif t in ("/help", "help", "bantuan"):
         await send_message(
-            "🆘 *Bantuan Presensi Udinus Bot*\n\n"
-            "📅 *Jadwal & Ujian*\n"
-            "`jadwal [hari]` — Jadwal kuliah hari ini/besok/senin\n"
-            "`jadwal gambar` — Screenshot jadwal hari ini (PNG)\n"
-            "`jadwal update` — Sinkron jadwal dari MHS\n"
-            "`ujian` / `ujian pacar` — Jadwal UTS/UAS\n"
-            "`libur` — Daftar hari libur nasional 2026\n\n"
-            "📝 *Tugas & Deadline*\n"
-            "`cek tugas` / `cek tugas pacar` — Tugas Kulino\n"
-            "`deadline` — List deadline tersimpan\n"
-            "`statustugas <nama>` — Tandai tugas selesai\n"
-            "`cleanup` — Hapus deadline yang sudah lewat\n\n"
-            "🤖 *Presensi*\n"
-            "`presensi` / `presensi pacar` — Presensi manual sekarang\n"
-            "`autopilot on/off` — Nyalakan/matikan autopilot\n"
-            "*(autopilot akan jalan otomatis 30 menit sebelum kelas)*\n\n"
-            "📊 *Info*\n"
-            "`status` — Status bot & statistik\n"
-            "`quickstats` / `ringkasan` — Ringkasan cepat\n"
-            "`nilai` / `khs` — Nilai & IP terbaru dari SiAdin\n"
-            "`tanggal` — Tanggal & hari ini\n"
-            "`logbook` — Riwayat presensi\n\n"
-            "🔧 *Settings*\n"
-            "`addalias <nama> <perintah>` — Bikin alias\n"
-            "`delalias <nama>` — Hapus alias\n\n"
-            "💡 *Tips:*\n"
-            "• Pagi jam 07:00 bot kirim reminder jadwal + screenshot otomatis\n"
-            "• Nilai baru terdeteksi otomatis — bot akan notify tanpa diminta!\n"
-            "• Tap ⏰ Snooze 10m di reminder kelas untuk tunda 10 menit\n"
-            "• Kirim `presensi pacar` buat absen akun Azfa\n"
-            "• Kirim `ujian pacar` buat lihat jadwal ujian Azfa\n"
-            "• Dashboard: `http://localhost:8787?token=presensi123`"
+            f"🆘 *Bantuan Presensi Udinus Bot*\n\n"
+            f"📅 *Jadwal & Ujian*\n"
+            f"`jadwal [hari]` — Jadwal kuliah hari ini/besok/senin\n"
+            f"`jadwal gambar` — Screenshot jadwal hari ini (PNG)\n"
+            f"`jadwal update` — Sinkron jadwal dari MHS\n"
+            f"`ujian` / `ujian {NAMA_PACAR.lower()}` — Jadwal UTS/UAS\n"
+            f"`libur` — Daftar hari libur nasional 2026\n\n"
+            f"📝 *Tugas & Deadline*\n"
+            f"`cek tugas` / `cek tugas {NAMA_PACAR.lower()}` — Tugas Kulino\n"
+            f"`deadline` — List deadline tersimpan\n"
+            f"`statustugas <nama>` — Tandai tugas selesai\n"
+            f"`cleanup` — Hapus deadline yang sudah lewat\n\n"
+            f"🤖 *Presensi*\n"
+            f"`presensi` / `presensi {NAMA_PACAR.lower()}` — Presensi manual sekarang\n"
+            f"`autopilot on/off` — Nyalakan/matikan autopilot\n"
+            f"*(autopilot akan jalan otomatis 30 menit sebelum kelas)*\n\n"
+            f"📊 *Info*\n"
+            f"`status` — Status bot & statistik\n"
+            f"`quickstats` / `ringkasan` — Ringkasan cepat\n"
+            f"`nilai` / `khs` — Nilai & IP terbaru dari SiAdin\n"
+            f"`tanggal` — Tanggal & hari ini\n"
+            f"`logbook` — Riwayat presensi\n\n"
+            f"🔧 *Settings*\n"
+            f"`addalias <nama> <perintah>` — Bikin alias\n"
+            f"`delalias <nama>` — Hapus alias\n\n"
+            f"💡 *Tips:*\n"
+            f"• Pagi jam 07:00 bot kirim reminder jadwal + screenshot otomatis\n"
+            f"• Nilai baru terdeteksi otomatis — bot akan notify tanpa diminta!\n"
+            f"• Tap ⏰ Snooze 10m di reminder kelas untuk tunda 10 menit\n"
+            f"• Kirim `presensi {NAMA_PACAR.lower()}` buat absen akun {NAMA_PACAR}\n"
+            f"• Kirim `ujian {NAMA_PACAR.lower()}` buat lihat jadwal ujian {NAMA_PACAR}\n"
+            f"• Dashboard: `http://localhost:8787`\n"
+            f"  (login pakai token dari admin)"
         )
 
     elif t in ("/status", "status", "stats"):
         uptime = datetime.now() - BOT_START_TIME
         d, r = uptime.days, uptime.seconds
         h, m = r // 3600, (r % 3600) // 60
-        cache = load_tasks_deadlines()
+        cache = await aload_tasks_deadlines()
         active = sum(1 for k in cache if k != "notified")
         snap = get_stats_snapshot()
         autopilot_status = _get_autopilot_func() if _get_autopilot_func else True
@@ -124,6 +207,15 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         else:
             await send_message("❌ Fitur sinkron jadwal belum terdaftar.")
 
+    elif t in ("/syncgcal", "sync gcal", "sinkron gcal"):
+        await send_message("⏳ Sync jadwal dari Google Calendar...")
+        if _syncgcal_func:
+            for w in MHS_ACCOUNTS:
+                ok, msg = await _syncgcal_func(w)
+                await send_message(f"{MHS_ACCOUNTS[w]['name']}: {'✅' if ok else '❌'} {msg}")
+        else:
+            await send_message("❌ Fitur sync gcal belum terdaftar.")
+
     elif t.startswith("jadwal") and ("gambar" in t or "foto" in t or "image" in t or "screenshot" in t):
         await send_message("⏳ Render jadwal...")
         from render import render_jadwal_png
@@ -140,7 +232,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         if not target_hari:
             await send_message("Hari tidak dikenali. Coba: `jadwal gambar senin`")
         else:
-            schedules = load_schedules()
+            schedules = await aload_schedules()
             async with get_page() as page:
                 ok = await render_jadwal_png(page, schedules, target_hari, SCREENSHOT_JADWAL)
             if ok and os.path.exists(SCREENSHOT_JADWAL):
@@ -150,11 +242,11 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
 
     elif t.startswith("jadwal"):
         arg = t.replace("jadwal", "", 1).strip()
-        for w in ("saya", "pacar"):
+        for w in MHS_ACCOUNTS:
             await send_message(get_schedule_for(w, arg or "hari ini"))
 
     elif t in ("deadline", "tugas deadline", "list deadline"):
-        cache = load_tasks_deadlines()
+        cache = await aload_tasks_deadlines()
         items = [k for k in cache if k != "notified"]
         if not items:
             await send_message("📭 Belum ada deadline.")
@@ -170,7 +262,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         if not keyword:
             await send_message("Gunakan: `statustugas <nama>`")
         else:
-            cache = load_tasks_deadlines()
+            cache = await aload_tasks_deadlines()
             found = None
             for k in list(cache.keys()):
                 if k != "notified" and keyword.lower() in cache[k]["name"].lower():
@@ -182,22 +274,22 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
                 for nk in list(cache.get("notified", {}).keys()):
                     if nk.startswith(found):
                         del cache["notified"][nk]
-                save_tasks_deadlines(cache)
+                await asave_tasks_deadlines(cache)
                 await send_message(f"✅ *{name}* ditandai selesai")
             else:
                 await send_message(f"❌ `{keyword}` tidak ditemukan")
 
     elif t in ("cleanup", "bersihkan", "hapus deadline"):
-        removed = cleanup_expired_deadlines()
+        removed = await acleanup_expired_deadlines()
         if removed:
-            active = sum(1 for k in load_tasks_deadlines() if k != "notified")
+            active = sum(1 for k in await aload_tasks_deadlines() if k != "notified")
             await send_message(f"🧹 {removed} dihapus. {active} tersisa.")
         else:
             await send_message("🧹 Tidak ada yang expired.")
 
     elif t in ("quickstats", "quick", "ringkasan", "stats cepat"):
         snap = get_stats_snapshot()
-        cache = load_tasks_deadlines()
+        cache = await aload_tasks_deadlines()
         now = datetime.now()
         nearest = []
         for k, v in cache.items():
@@ -222,9 +314,9 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
 
         day_name = now.strftime("%A").lower()
         hari_id = HARI_ID.get(day_name, "")
-        schedules = load_schedules()
+        schedules = await aload_schedules()
         total_classes = sum(
-            len(schedules.get(w, {}).get(hari_id, [])) for w in ("saya", "pacar")
+            len(schedules.get(w, {}).get(hari_id, [])) for w in MHS_ACCOUNTS
         ) if hari_id else 0
         today_holiday = get_today_holiday()
         holiday_text = f"🎉 {today_holiday}" if today_holiday else ""
@@ -266,7 +358,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         else:
             name = parts[1]
             cmd = parts[2]
-            add_alias(name, cmd)
+            await aadd_alias(name, cmd)
             await send_message(f"✅ Alias `/{name}` → `{cmd}`")
 
     elif t.startswith("delalias") or t.startswith("/delalias"):
@@ -274,12 +366,15 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         if len(parts) < 2:
             await send_message("Gunakan: `delalias <nama>`")
         else:
-            if remove_alias(parts[1].lower()):
+            if await aremove_alias(parts[1].lower()):
                 await send_message(f"✅ Alias `/{parts[1]}` dihapus.")
             else:
                 await send_message(f"❌ Alias `{parts[1]}` tidak ditemukan.")
 
     elif t.startswith("/addchid") or t.startswith("addchid"):
+        if ADMIN_CHAT_ID and chat_id != ADMIN_CHAT_ID:
+            await send_message("❌ Hanya admin yang bisa menjalankan perintah ini.")
+            return
         parts = text.split()
         if len(parts) < 2:
             await send_message("Gunakan: `/addchid <chat_id>`")
@@ -289,14 +384,14 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
                 if new_id in ALLOWED_CHAT_IDS:
                     await send_message(f"ℹ️ {new_id} sudah ada.")
                 else:
-                    ALLOWED_CHAT_IDS.append(new_id)
-                    save_chat_id(new_id)
+                    ALLOWED_CHAT_IDS.add(new_id)
+                    await asave_chat_id(new_id)
                     await send_message(f"✅ {new_id} ditambahkan!")
             except ValueError:
                 await send_message("Format salah")
 
     elif "tugas" in t or "cek tugas" in t:
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        target = _resolve_target(chat_id, t)
         inc_stat("tugas_checks")
         await send_message("⏳ Cek tugas...")
         if _login_kulino_func:
@@ -342,7 +437,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         if today_h:
             await send_message(f"📢 Hari ini libur: *{today_h}*.\nTidak perlu presensi.")
             return
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        target = _resolve_target(chat_id, t)
         if _do_presensi_func:
             ok, msg = await _do_presensi_func(target)
             if ok:
@@ -355,14 +450,14 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
             await send_message("❌ Fitur presensi belum terdaftar.")
 
     elif t in ("nilai", "khs", "cek nilai", "daftarnilai", "hasil studi"):
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        target = _resolve_target(chat_id, t)
         account = MHS_ACCOUNTS[target]
         await send_message(f"⏳ Ambil KHS {account['name']}...")
         try:
             from browser import get_page
-            import scrapers as tb
-            from scrapers import format_khs_message
-            async with get_page() as page:
+            from scrapers.kulino import scrape_kulino_tugas
+
+            async with get_page(".browser_state/kulino_" + target + ".json") as page:
                 await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
                 await page.wait_for_timeout(2000)
                 await page.fill("#username", account["nim"])
@@ -373,21 +468,21 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
             await send_message(format_khs_message(khs, account["name"]))
             # local fallback to internal update method
             from bot import _save_khs_history
-            _save_khs_history(target, khs)
-            cache = load_nilai_cache()
+            await _save_khs_history(target, khs)
+            cache = await aload_nilai_cache()
             cache[target] = {m["kdmk"]: m for m in khs["matkul"]}
-            save_nilai_cache(cache)
+            await asave_nilai_cache(cache)
         except Exception as e:
             logger.error(f"KHS error: {e}")
             await send_message(f"❌ Gagal ambil KHS: {e}")
 
     elif t.startswith("ujian"):
-        target = "pacar" if "azfa" in t or "pacar" in t else "saya"
+        target = _resolve_target(chat_id, t)
         await send_message(f"⏳ Cek jadwal ujian {MHS_ACCOUNTS[target]['name']}...")
         try:
             from browser import get_page
-            import scrapers as tb
-            async with get_page() as page:
+
+            async with get_page(".browser_state/mhs_" + target + ".json") as page:
                 account = MHS_ACCOUNTS[target]
                 await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
                 await page.wait_for_timeout(2000)
@@ -445,7 +540,7 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
         now = datetime.now()
         year, month = now.year, now.month
         await send_message(f"⏳ Hitung statistik presensi {MHS_ACCOUNTS[target]['name']}...")
-        schedules = load_schedules()
+        schedules = await aload_schedules()
         results = compute_attendance(schedules, target, year, month)
         msg = format_attendance_message(results, MHS_ACCOUNTS[target]["name"], year, month)
         await send_message(msg)
@@ -461,14 +556,14 @@ async def handle_command(text: str, chat_id: int | None = None) -> None:
 
             intent = parse_question(text)
             if intent["intent"] in ("jadwal", "presensi") and intent["hari"]:
-                schedules = load_schedules()
+                schedules = await aload_schedules()
                 if intent["intent"] == "jadwal":
                     reply = answer_jadwal(intent, schedules, "saya")
                 else:
                     reply = answer_presensi(intent, schedules)
                 await send_message(reply)
             elif intent["intent"] == "deadline":
-                cache = load_tasks_deadlines()
+                cache = await aload_tasks_deadlines()
                 items = [v for k, v in cache.items() if k != "notified"]
                 if intent["keyword"]:
                     items = [i for i in items if intent["keyword"].lower() in i.get("name", "").lower()]

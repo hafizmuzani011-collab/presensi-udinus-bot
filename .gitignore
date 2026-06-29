@@ -43,6 +43,7 @@ desktop.ini
 *.swo
 *~
 .opencode/
+.browser_state/
 
 # Auto-generated runtime files
 stats.json

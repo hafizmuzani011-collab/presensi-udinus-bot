@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 MHS_URL = "https://mhs.dinus.ac.id/"
 
 
-async def login_mhs_and_scrape_jadwal(page, mhs_akun: dict, semester: str = "2025-2026 Genap") -> dict:
+async def login_mhs_and_scrape_jadwal(page, mhs_akun: dict, semester: str = "") -> dict:
     jadwal_pattern = re.compile(
         r'^(SENIN|SELASA|RABU|KAMIS|JUMAT|SABTU|MINGGU)\s+'
         r'(\d+[.:]\d+\s*-\s*\d+[.:]\d+)\s+'

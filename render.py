@@ -2,7 +2,6 @@
 import logging
 from datetime import datetime
 
-from config import NAMA_PACAR, NAMA_SAYA
 from constants import HARI_INDONESIA, HARI_ORDER
 
 logger = logging.getLogger(__name__)
@@ -12,15 +11,16 @@ _VALID_HARI = set(HARI_ORDER)
 
 def _build_html(schedules: dict, hari_id: str, tanggal_str: str) -> str:
     """Build HTML page for jadwal hari tertentu."""
+    from config import MHS_ACCOUNTS
     rows_html = ""
     total = 0
-    for who in ("saya", "pacar"):
-        nama = NAMA_SAYA if who == "saya" else NAMA_PACAR
+    for who in MHS_ACCOUNTS:
+        nama = MHS_ACCOUNTS[who]["name"]
         slots = schedules.get(who, {}).get(hari_id, [])
         if not slots:
             rows_html += (
                 '<div class="row">'
-                f'<div class="name">{nama}</div>'
+                f'<div class="name">{esc(nama)}</div>'
                 '<div class="empty">Tidak ada kelas &#x1F389;</div>'
                 '</div>'
             )
@@ -96,11 +96,10 @@ async def render_jadwal_png(page, schedules: dict, hari_id: str, output_path: st
 async def get_today_jadwal_png(schedules: dict, output_path: str) -> bool:
     """Convenience: render jadwal hari ini ke PNG (create new page)."""
     from browser import get_page
+    from constants import HARI_ID
 
     day_name = datetime.now().strftime("%A").lower()
-    hari_id = {"monday": "senin", "tuesday": "selasa", "wednesday": "rabu",
-               "thursday": "kamis", "friday": "jumat", "saturday": "sabtu",
-               "sunday": "minggu"}.get(day_name, "")
+    hari_id = HARI_ID.get(day_name, "")
     if not hari_id:
         return False
     async with get_page() as page:

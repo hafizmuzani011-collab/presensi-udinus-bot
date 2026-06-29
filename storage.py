@@ -1,4 +1,9 @@
-"""Persistence layer - semua file I/O terpusat di sini."""
+"""Data persistence — chat IDs, schedules, tasks, and logbook.
+
+Async-first storage layer with file locking and atomic writes.
+Uses JSON files for persistence with thread-safe operations.
+"""
+import asyncio
 import json
 import logging
 import os
@@ -21,7 +26,105 @@ logger = logging.getLogger(__name__)
 
 # Global lock for all json storage files to prevent race conditions
 # between Flask dashboard thread and Asyncio Bot Loop
-_storage_lock = threading.Lock()
+_storage_lock = threading.RLock()
+
+# ============ State persistence (reminders, snoozes) ============
+_STATE_FILE = os.path.join(os.path.dirname(PRESENSI_DONE_FILE), "state.json")
+
+
+def load_state() -> dict:
+    with _storage_lock:
+        if not os.path.exists(_STATE_FILE):
+            return {"reminder_sent": [], "snoozed": {}}
+        try:
+            with open(_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {"reminder_sent": [], "snoozed": {}}
+
+
+def save_state(data: dict) -> None:
+    with _storage_lock:
+        try:
+            atomic_write(_STATE_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+        except OSError:
+            pass
+
+
+async def aload_state() -> dict:
+    return await asyncio.to_thread(load_state)
+
+
+async def asave_state(data: dict) -> None:
+    await asyncio.to_thread(save_state, data)
+
+
+async def aload_chat_ids() -> list[int]:
+    return await asyncio.to_thread(load_chat_ids)
+
+
+async def asave_chat_id(chat_id: int) -> None:
+    await asyncio.to_thread(save_chat_id, chat_id)
+
+
+async def aload_offset() -> int | None:
+    return await asyncio.to_thread(load_offset)
+
+
+async def asave_offset(offset: int) -> None:
+    await asyncio.to_thread(save_offset, offset)
+
+
+async def aload_schedules() -> dict:
+    return await asyncio.to_thread(load_schedules)
+
+
+async def aload_tasks_deadlines() -> dict:
+    return await asyncio.to_thread(load_tasks_deadlines)
+
+
+async def asave_tasks_deadlines(data: dict) -> None:
+    await asyncio.to_thread(save_tasks_deadlines, data)
+
+
+async def acleanup_expired_deadlines() -> int:
+    return await asyncio.to_thread(cleanup_expired_deadlines)
+
+
+async def awrite_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang: str, status: str) -> None:
+    await asyncio.to_thread(write_logbook, date_str, account_key, jam, matkul, ruang, status)
+
+
+async def aload_presensi_done() -> dict:
+    return await asyncio.to_thread(load_presensi_done)
+
+
+async def asave_presensi_done(date_str: str, keys: set) -> None:
+    await asyncio.to_thread(save_presensi_done, date_str, keys)
+
+
+async def aload_nilai_cache() -> dict:
+    return await asyncio.to_thread(load_nilai_cache)
+
+
+async def asave_nilai_cache(data: dict) -> None:
+    await asyncio.to_thread(save_nilai_cache, data)
+
+
+async def aload_material_cache() -> dict:
+    return await asyncio.to_thread(load_material_cache)
+
+
+async def asave_material_cache(data: dict) -> None:
+    await asyncio.to_thread(save_material_cache, data)
+
+
+async def aload_khs_history() -> dict:
+    return await asyncio.to_thread(load_khs_history)
+
+
+async def asave_khs_history(data: dict) -> None:
+    await asyncio.to_thread(save_khs_history, data)
 
 # ============ Chat ID ============
 def load_chat_ids() -> list[int]:
@@ -43,10 +146,10 @@ def load_chat_ids() -> list[int]:
 
 
 def save_chat_id(chat_id: int) -> None:
-    ids = load_chat_ids()
-    if chat_id not in ids:
-        ids.append(chat_id)
     with _storage_lock:
+        ids = load_chat_ids()
+        if chat_id not in ids:
+            ids.append(chat_id)
         atomic_write(CHAT_ID_FILE, ",".join(str(i) for i in ids))
 
 
@@ -84,7 +187,7 @@ def load_schedules() -> dict:
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"{SCHEDULES_FILE} corrupt, reset: {e}")
             return {}
-    
+
     # Validasi schema: harus dict of dict of list
     if not isinstance(data, dict):
         logger.warning(f"{SCHEDULES_FILE}: invalid type, reset")
@@ -180,12 +283,13 @@ def write_logbook(date_str: str, account_key: str, jam: str, matkul: str, ruang:
     path = os.path.join(LOG_DIR, f"{date_str}.md")
     icon = "✅" if status == "hadir" else "❌"
     line = f"- {jam} - {matkul} {icon} ({account_key}, Ruang {ruang})\n"
-    with open(path, "a", encoding="utf-8") as f:
-        # Header kalau file baru
-        if os.path.getsize(path) == 0:
-            dt = datetime.fromisoformat(date_str)
-            f.write(f"## {dt.strftime('%A, %d %B %Y')}\n\n")
-        f.write(line)
+    with _storage_lock:
+        with open(path, "a", encoding="utf-8") as f:
+            # Header kalau file baru
+            if os.path.getsize(path) == 0:
+                dt = datetime.fromisoformat(date_str)
+                f.write(f"## {dt.strftime('%A, %d %B %Y')}\n\n")
+            f.write(line)
 
 
 # ============ Presensi Done (persist across restart) ============
@@ -274,13 +378,24 @@ def compute_attendance(
     # Count total classes per course for this month
     total_per_course: dict[str, int] = {}
     _, days_in_month = _monthrange(year, month)
-    for day in range(1, days_in_month + 1):
+    # Only count up to today if current month
+    today = datetime.now()
+    max_day = days_in_month if (year != today.year or month != today.month) else today.day
+
+    # Pre-calculate counts of each day-of-week in the range
+    day_counts: dict[str, int] = {}
+    for day in range(1, max_day + 1):
         dt = datetime(year, month, day)
-        hari_id = HARI_ID.get(dt.strftime("%A").lower(), "")
-        if not hari_id or hari_id not in account_sched:
-            continue
-        for jam, mk, _ in account_sched[hari_id]:
-            total_per_course[mk] = total_per_course.get(mk, 0) + 1
+        day_name = dt.strftime("%A").lower()
+        hari_id = HARI_ID.get(day_name, "")
+        if hari_id:
+            day_counts[hari_id] = day_counts.get(hari_id, 0) + 1
+
+    for hari_id, slots in account_sched.items():
+        multiplier = day_counts.get(hari_id, 0)
+        if multiplier > 0:
+            for _, mk, _ in slots:
+                total_per_course[mk] = total_per_course.get(mk, 0) + multiplier
 
     # Count attended from logbook
     hadir_per_course: dict[str, int] = {}

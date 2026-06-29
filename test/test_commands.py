@@ -17,7 +17,7 @@ def setup_env(monkeypatch, tmp_path):
               "MHS_PACAR_NIM", "MHS_PACAR_PASS", "DASH_TOKEN"):
         monkeypatch.setenv(k, "test")
     # Isolasi config module
-    monkeypatch.setattr("bot.ALLOWED_CHAT_IDS", [12345])
+    monkeypatch.setattr("bot.ALLOWED_CHAT_IDS", {12345})
 
 
 @pytest.fixture
@@ -198,7 +198,8 @@ class TestAutopilot:
 class TestDeadlineTask:
     @pytest.mark.asyncio
     async def test_deadline_empty(self, mock_send, monkeypatch):
-        monkeypatch.setattr("handlers.load_tasks_deadlines", lambda: {"notified": {}})
+        async def _mock(): return {"notified": {}}
+        monkeypatch.setattr("handlers.aload_tasks_deadlines", _mock)
         with patch("handlers.send_message", mock_send):
             from bot import handle_command
             await handle_command("deadline")
@@ -207,8 +208,10 @@ class TestDeadlineTask:
 
     @pytest.mark.asyncio
     async def test_cleanup(self, mock_send, monkeypatch):
-        monkeypatch.setattr("handlers.cleanup_expired_deadlines", lambda: 2)
-        monkeypatch.setattr("handlers.load_tasks_deadlines", lambda: {"notified": {}})
+        async def _mock_clean(): return 2
+        async def _mock_tdl(): return {"notified": {}}
+        monkeypatch.setattr("handlers.acleanup_expired_deadlines", _mock_clean)
+        monkeypatch.setattr("handlers.aload_tasks_deadlines", _mock_tdl)
         with patch("handlers.send_message", mock_send):
             from bot import handle_command
             await handle_command("cleanup")
@@ -254,16 +257,18 @@ class TestQuickStats:
         monkeypatch.setattr("handlers.get_stats_snapshot",
                             lambda: {"messages_received": 5, "presensi_done": 2,
                                      "tugas_checks": 1, "errors": 0})
-        monkeypatch.setattr("handlers.load_tasks_deadlines", lambda: {
+        async def _mock_tdl(): return {
             "saya:tugas_dekat": {"name": "Tugas Dekat", "account": NAMA_SAYA,
                                   "deadline_iso": future, "deadline_raw": "Besok"},
             "saya:tugas_lewat": {"name": "Tugas Lewat", "account": NAMA_SAYA,
                                   "deadline_iso": past, "deadline_raw": "Kemarin"},
             "notified": {},
-        })
-        monkeypatch.setattr("handlers.load_schedules", lambda: {
+        }
+        async def _mock_sched(): return {
             "saya": {"senin": []}, "pacar": {"senin": []},
-        })
+        }
+        monkeypatch.setattr("handlers.aload_tasks_deadlines", _mock_tdl)
+        monkeypatch.setattr("handlers.aload_schedules", _mock_sched)
         monkeypatch.setattr("bot.get_today_holiday", lambda: None)
         with patch("handlers.send_message", mock_send):
             from bot import handle_command
@@ -276,8 +281,10 @@ class TestQuickStats:
 
     @pytest.mark.asyncio
     async def test_quickstats_alias(self, mock_send, monkeypatch):
-        monkeypatch.setattr("handlers.load_tasks_deadlines", lambda: {"notified": {}})
-        monkeypatch.setattr("handlers.load_schedules", lambda: {"saya": {}, "pacar": {}})
+        async def _mock_tdl(): return {"notified": {}}
+        async def _mock_sched(): return {"saya": {}, "pacar": {}}
+        monkeypatch.setattr("handlers.aload_tasks_deadlines", _mock_tdl)
+        monkeypatch.setattr("handlers.aload_schedules", _mock_sched)
         monkeypatch.setattr("bot.get_today_holiday", lambda: None)
         with patch("handlers.send_message", mock_send):
             from bot import handle_command
@@ -286,8 +293,10 @@ class TestQuickStats:
 
     @pytest.mark.asyncio
     async def test_quickstats_holiday(self, mock_send, monkeypatch):
-        monkeypatch.setattr("handlers.load_tasks_deadlines", lambda: {"notified": {}})
-        monkeypatch.setattr("handlers.load_schedules", lambda: {"saya": {}, "pacar": {}})
+        async def _mock_tdl(): return {"notified": {}}
+        async def _mock_sched(): return {"saya": {}, "pacar": {}}
+        monkeypatch.setattr("handlers.aload_tasks_deadlines", _mock_tdl)
+        monkeypatch.setattr("handlers.aload_schedules", _mock_sched)
         monkeypatch.setattr("bot.get_today_holiday", lambda: "Hari Raya")
         with patch("handlers.send_message", mock_send):
             from bot import handle_command
@@ -325,7 +334,8 @@ class TestJadwalGambar:
             return True
         monkeypatch.setattr("browser.get_page", fake_get_page)
         monkeypatch.setattr("render.render_jadwal_png", fake_render)
-        monkeypatch.setattr("handlers.load_schedules", lambda: {"saya": {"senin": []}, "pacar": {"senin": []}})
+        async def _mock_sched_gambar(): return {"saya": {"senin": []}, "pacar": {"senin": []}}
+        monkeypatch.setattr("handlers.aload_schedules", _mock_sched_gambar)
         with patch("handlers.send_message", mock_send), patch("handlers.send_photo", AsyncMock()):
             from bot import handle_command
             await handle_command("jadwal gambar senin")

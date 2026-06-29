@@ -153,8 +153,8 @@ async def _verify_presensi_success(page) -> tuple[bool, str]:
         except Exception:
             pass
 
-        logger.info("Presensi verification: no clear indicator, assuming success")
-        return True, "no error indicator"
+        logger.info("Presensi verification: no clear indicator, marking uncertain")
+        return False, "verifikasi tidak pasti — tidak ada indikator jelas"
     except Exception as e:
         logger.error(f"Presensi verification error: {e}")
         return False, f"verifikasi error: {e}"

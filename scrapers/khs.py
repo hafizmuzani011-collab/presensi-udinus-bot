@@ -48,7 +48,7 @@ async def scrape_khs(page, mhs_akun: dict) -> dict:
             sks_match = re.match(r"^(\d+)\s+SKS$", lines[i + 1], re.I)
             kdmk_match = re.match(r"^KDMK:\s*(\S+)", lines[i + 2], re.I)
             grade_line = lines[i + 3].strip().upper()
-            is_grade = any(h in grade_line for h in ["A", "B", "C", "D", "E"])
+            is_grade = re.match(r"^[ABC][+-]?$|^AB$|^BC$|^[DE]$", grade_line) is not None
 
             if sks_match and kdmk_match and is_grade and len(grade_line) <= 4:
                 matkul = line

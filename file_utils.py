@@ -1,7 +1,11 @@
-"""Shared file I/O utilities — atomic writes, path helpers."""
+"""Shared file I/O utilities — atomic writes, path helpers.
+
+Provides crash-safe file operations to prevent corruption from
+partial writes or concurrent access.
+"""
 import json
-import os
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +27,7 @@ def atomic_write_json(path: str, data: dict | list, use_fsync: bool = True) -> N
 
 def read_json(path: str) -> dict | list:
     if not os.path.exists(path):
-        return {} if isinstance({}, type) else []
+        return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)

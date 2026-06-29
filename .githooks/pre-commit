@@ -5,12 +5,12 @@ FAILED=0
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 echo "Checking syntax..."
-python -m py_compile bot.py config.py storage.py utils.py tg.py telegram_bot.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "SYNTAX FAILED"; FAILED=1; }
+python -m py_compile bot.py config.py storage.py utils.py tg.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "SYNTAX FAILED"; FAILED=1; }
 python -m py_compile test/*.py 2>&1 || { echo "TEST SYNTAX FAILED"; FAILED=1; }
 
 if command -v ruff >/dev/null; then
     echo "Running ruff lint (unused imports/vars only)..."
-    python -m ruff check --select=F401,F841 bot.py config.py storage.py utils.py tg.py telegram_bot.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "LINT FAILED"; FAILED=1; }
+    python -m ruff check --select=F401,F841 bot.py config.py storage.py utils.py tg.py web_dashboard.py browser.py instance_lock.py nlp.py tts.py aliases.py 2>&1 || { echo "LINT FAILED"; FAILED=1; }
 fi
 
 echo "Running tests..."

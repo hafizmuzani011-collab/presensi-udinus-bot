@@ -87,10 +87,12 @@ class TestSnoozeFireLogic:
             sent.append(text)
             return True
         monkeypatch.setattr("bot.send_message", _send)
-        monkeypatch.setattr("bot.load_schedules", lambda: {
-            "saya": {"senin": [["07:00-08:40", "Basis Data", "D.2.J"]]},
-            "pacar": {"senin": []},
-        })
+        async def _load_scheds():
+            return {
+                "saya": {"senin": [["07:00-08:40", "Basis Data", "D.2.J"]]},
+                "pacar": {"senin": []},
+            }
+        monkeypatch.setattr("bot.aload_schedules", _load_scheds)
         # Add expired snooze
         bot._snoozed_reminders["snoozed:saya:senin:07:00"] = time.time() - 1
         await bot._check_snoozed_reminders("senin")
@@ -150,7 +152,9 @@ class TestSnoozeFireLogic:
             sent.append(text)
             return True
         monkeypatch.setattr("bot.send_message", _send)
-        monkeypatch.setattr("bot.load_schedules", lambda: {"saya": {"senin": []}, "pacar": {"senin": []}})
+        async def _load_scheds():
+            return {"saya": {"senin": []}, "pacar": {"senin": []}}
+        monkeypatch.setattr("bot.aload_schedules", _load_scheds)
         bot._snoozed_reminders["snoozed:saya:senin:07:00"] = time.time() - 1
         await bot._check_snoozed_reminders("senin")
         # Cleared because schedule not found
@@ -166,10 +170,12 @@ class TestSnoozeFireLogic:
             sent.append(text)
             return True
         monkeypatch.setattr("bot.send_message", _send)
-        monkeypatch.setattr("bot.load_schedules", lambda: {
-            "saya": {"senin": [["07:00-08:40", "Basis Data", "D.2.J"]]},
-            "pacar": {"senin": []},
-        })
+        async def _load_scheds():
+            return {
+                "saya": {"senin": [["07:00-08:40", "Basis Data", "D.2.J"]]},
+                "pacar": {"senin": []},
+            }
+        monkeypatch.setattr("bot.aload_schedules", _load_scheds)
         # Set snooze in the future
         bot._snoozed_reminders["snoozed:saya:senin:07:00"] = time.time() + 600
         await bot._check_snoozed_reminders("senin")

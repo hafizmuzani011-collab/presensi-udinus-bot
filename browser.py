@@ -1,11 +1,20 @@
 """Shared browser context — persistent context, thread-safe, auto-reconnect."""
 import asyncio
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from playwright.async_api import async_playwright, Browser
 
 logger = logging.getLogger(__name__)
+
+# Persistent cookie storage directory
+_STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".browser_state")
+
+def _get_state_path(domain: str, account_key: str) -> str:
+    os.makedirs(_STATE_DIR, exist_ok=True)
+    return os.path.join(_STATE_DIR, f"{domain}_{account_key}.json")
 
 # Global state
 _playwright = None
@@ -54,22 +63,39 @@ async def _ensure_browser() -> Browser:
 
 
 @asynccontextmanager
-async def get_page():
-    """Context manager: yield new page in a fresh ISOLATED context, auto-close context."""
+async def get_page(cookies_file: str = ""):
+    """Context manager: yield page. Optionally load cookies from file before nav."""
     context = None
     page = None
     try:
         browser = await _ensure_browser()
-        context = await browser.new_context(
-            user_agent=(
+        kwargs = {
+            "user_agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
             )
-        )
+        }
+        if cookies_file and os.path.exists(cookies_file):
+            try:
+                with open(cookies_file, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                kwargs["storage_state"] = state
+            except (json.JSONDecodeError, OSError):
+                pass
+        context = await browser.new_context(**kwargs)
         page = await context.new_page()
         yield page
     finally:
+        # Save cookies on successful exit (if cookies_file requested)
+        if cookies_file and context:
+            try:
+                state = await context.storage_state()
+                if state and (state.get("cookies") or state.get("origins")):
+                    with open(cookies_file, "w", encoding="utf-8") as f:
+                        json.dump(state, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
         if page:
             try:
                 await page.close()
@@ -106,6 +132,14 @@ async def login_siadin_portal(page, nim: str, password: str, wait_selector: str 
     try:
         await page.goto("https://mhs.dinus.ac.id/", wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(2000)
+
+        # Check if already logged in (no #username input)
+        if not await page.query_selector("#username"):
+            logger.info(f"SiAdin: already logged in for {nim}")
+            if wait_selector:
+                await page.wait_for_selector(wait_selector, timeout=10000)
+            return True
+
         await page.fill("#username", nim)
         await page.fill("#password", password)
         async with page.expect_navigation(timeout=30000, wait_until="networkidle"):
